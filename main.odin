@@ -9,14 +9,121 @@ import "vendor:glfw"
 
 import glm "core:math/linalg/glsl"
 
+import "core:os"
+import "core:strconv"
+import "core:strings"
+
 GL_MAJOR_VERSION :: 4
 GL_MINOR_VERSION :: 6
 WINDOW_WIDTH :: 1920
 WINDOW_HEIGHT :: 1080
 
 running: b32 = true
+zoom_factor: f32 = 1.0
+
+Vertex :: struct {
+	position: glm.vec3,
+	normal:   glm.vec3,
+	texcoord: glm.vec2,
+}
+
+load_obj :: proc(
+	filepath: string,
+) -> (
+	vertices: [dynamic]Vertex,
+	indices: [dynamic]u32,
+	ok: bool,
+) {
+	data := os.read_entire_file(filepath, context.allocator) or_return
+	defer delete(data, context.allocator)
+
+	it := string(data)
+
+	positions := [dynamic]glm.vec3{}
+	uvs := [dynamic]glm.vec2{}
+	normals := [dynamic]glm.vec3{}
+
+	index: u32 = 0
+
+	for line in strings.split_lines_iterator(&it) {
+		if strings.starts_with(line, "v ") {
+			parts := strings.split(line, " ")
+			x := strconv.parse_f32(parts[1]) or_return
+			y := strconv.parse_f32(parts[2]) or_return
+			z := strconv.parse_f32(parts[3]) or_return
+			append(&positions, glm.vec3{x, y, z})
+
+		} else if strings.starts_with(line, "vt ") {
+			parts := strings.split(line, " ")
+			u := strconv.parse_f32(parts[1]) or_return
+			v := strconv.parse_f32(parts[2]) or_return
+			append(&uvs, glm.vec2{u, v})
+
+		} else if strings.starts_with(line, "vn ") {
+			parts := strings.split(line, " ")
+			nx := strconv.parse_f32(parts[1]) or_return
+			ny := strconv.parse_f32(parts[2]) or_return
+			nz := strconv.parse_f32(parts[3]) or_return
+			append(&normals, glm.vec3{nx, ny, nz})
+		} else if strings.starts_with(line, "f ") {
+			parts := strings.split(line, " ")
+
+			for i := 1; i <= 3; i += 1 {
+				v_t_n := strings.split(parts[i], "/")
+
+				position := glm.vec3{f32(0), f32(0), f32(0)}
+				texcoord := glm.vec2{f32(0), f32(0)}
+				normal := glm.vec3{f32(0), f32(0), f32(0)}
+
+				v := strconv.parse_i64(v_t_n[0]) or_return
+				position = positions[v - 1]
+
+				if len(v_t_n) == 2 {
+					if len(v_t_n[1]) > 0 {
+						t := strconv.parse_i64(v_t_n[1]) or_return
+						texcoord = uvs[t - 1]
+					}
+
+				} else if len(v_t_n) == 3 {
+					if len(v_t_n[1]) > 0 {
+						t := strconv.parse_i64(v_t_n[1]) or_return
+						texcoord = uvs[t - 1]
+					}
+
+					if len(v_t_n[2]) > 0 {
+						n := strconv.parse_i64(v_t_n[2]) or_return
+						normal = normals[n - 1]
+					}
+				}
+
+				append(&vertices, Vertex{position, normal, texcoord})
+				append(&indices, index)
+				index += 1
+			}
+		}
+	}
+
+	delete(positions)
+	delete(uvs)
+	delete(normals)
+
+	ok = true
+	return
+}
+
 
 main :: proc() {
+
+	model_filepath := "stanford-bunny.obj"
+
+	vertices, indices, loaded := load_obj(model_filepath)
+
+	if !loaded {
+		fmt.printfln("Failed to load %s", model_filepath)
+		return
+	}
+
+	fmt.printfln("Loaded %d vertices %d indices", len(vertices), len(indices))
 
 	glfw.WindowHint(glfw.RESIZABLE, 1)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, GL_MAJOR_VERSION)
@@ -40,6 +147,7 @@ main :: proc() {
 	glfw.MakeContextCurrent(window)
 	glfw.SwapInterval(1)
 	glfw.SetKeyCallback(window, key_callback)
+	glfw.SetScrollCallback(window, scroll_callback)
 	glfw.SetFramebufferSizeCallback(window, size_callback)
 
 	gl.load_up_to(int(GL_MAJOR_VERSION), GL_MINOR_VERSION, glfw.gl_set_proc_address)
@@ -53,181 +161,44 @@ main :: proc() {
 
 	vs_source := `#version 460
     layout (location = 0) in vec3 aPos;
-    layout (location = 1) in vec3 aColor;
-    layout (location = 2) in vec3 aNormal;
-
+	layout (location = 1) in vec3 aNormal;
+	layout (location = 2) in vec2 aTexCoords;
+	
     uniform mat4 uProjection;
     uniform mat4 uView;
     uniform mat4 uModel;
 
-    out vec3 Color;
-    out vec3 Normal;
+	out vec3 Normal;
+	out vec2 TexCoords;
+	
     void main() {
         gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
-        Color = aColor;
-        Normal = aNormal;
+		Normal = mat3(uModel) * aNormal;
+		// Normal = aNormal;
+		TexCoords = aTexCoords;
     }
     `
 
+
 	fs_source := `#version 460
     out vec4 FragColor;
-    in vec3 Color;
-    in vec3 Normal;
+
+	in vec3 Normal;
+	in vec2 TexCoords;
+
     void main() {
-        FragColor = vec4(Color * Normal, 1.0);
+        FragColor = vec4(Normal, 1.0f);
     }
     `
+
 
 	program, ok := gl.load_shaders_source(vs_source, fs_source)
 	if !ok {
 		return
 	}
 
-	cube_vertices := []f32 {
-		// front
-		-1.0,
-		-1.0,
-		1.0,
-		1,
-		1,
-		1,
-		1.0,
-		-1.0,
-		1.0,
-		1,
-		1,
-		1,
-		1.0,
-		1.0,
-		1.0,
-		1,
-		1,
-		1,
-		-1.0,
-		1.0,
-		1.0,
-		1,
-		1,
-		1,
-		// back
-		-1.0,
-		-1.0,
-		-1.0,
-		1,
-		1,
-		1,
-		1.0,
-		-1.0,
-		-1.0,
-		1,
-		1,
-		1,
-		1.0,
-		1.0,
-		-1.0,
-		1,
-		1,
-		1,
-		-1.0,
-		1.0,
-		-1.0,
-		1,
-		1,
-		1,
-	}
-
-	cube_colors := []f32 {
-		// front
-		0,
-		0,
-		1,
-		1,
-		0,
-		1,
-		0,
-		1,
-		1,
-		0,
-		0,
-		1,
-		1,
-		1,
-		1,
-		1,
-		// back
-		0,
-		1,
-		0,
-		1,
-		1,
-		0,
-		0,
-		1,
-		1,
-		1,
-		1,
-		1,
-		0,
-		0,
-		1,
-		1,
-	}
-
-	cube_vbo := create_buffer(
-		u32(len(cube_vertices) * size_of(f32)),
-		raw_data(cube_vertices),
-		.Static,
-	)
-	cube_vbo_color := create_buffer(
-		u32(len(cube_colors) * size_of(f32)),
-		raw_data(cube_colors),
-		.Static,
-	)
-
-	cube_indices := []u32 {
-		0,
-		1,
-		2,
-		2,
-		3,
-		0,
-		1,
-		5,
-		6,
-		6,
-		2,
-		1,
-		7,
-		6,
-		5,
-		5,
-		4,
-		7,
-		4,
-		0,
-		3,
-		3,
-		7,
-		4,
-		4,
-		5,
-		1,
-		1,
-		0,
-		4,
-		3,
-		2,
-		6,
-		6,
-		7,
-		3,
-	}
-
-	cube_ebo := create_buffer(
-		u32(len(cube_indices) * size_of(u32)),
-		raw_data(cube_indices),
-		.Static,
-	)
+	model_vbo := create_buffer(u32(len(vertices) * size_of(Vertex)), raw_data(vertices), .Static)
+	model_ebo := create_buffer(u32(len(indices) * size_of(u32)), raw_data(indices), .Static)
 
 	pipeline := create_pipeline(
 		PipelineDescription {
@@ -257,31 +228,25 @@ main :: proc() {
 				bindings = []VertexInputBinding {
 					VertexInputBinding {
 						binding = 0,
-						stride = 6 * size_of(f32),
+						stride = size_of(Vertex),
 						elements = []VertexInputAttribute {
 							VertexInputAttribute {
 								location = 0,
 								format = .Float3,
 								normalized = gl.FALSE,
-								offset = 0,
+								offset = u32(offset_of(Vertex, position)),
 							},
 							VertexInputAttribute {
 								location = 1,
 								format = .Float3,
 								normalized = gl.FALSE,
-								offset = 3 * size_of(f32),
+								offset = u32(offset_of(Vertex, normal)),
 							},
-						},
-					},
-					VertexInputBinding {
-						binding = 1,
-						stride = 3 * size_of(f32),
-						elements = []VertexInputAttribute {
 							VertexInputAttribute {
 								location = 2,
-								format = .Float3,
+								format = .Float2,
 								normalized = gl.FALSE,
-								offset = 0,
+								offset = u32(offset_of(Vertex, texcoord)),
 							},
 						},
 					},
@@ -303,11 +268,13 @@ main :: proc() {
 
 	frame_start_time := glfw.GetTime()
 	frame_end_time := glfw.GetTime()
-	frame_elapsed_time := frame_end_time - frame_start_time
-
+	frame_elapsed_time : f32 = 0.0
 	frame_count := 0
 
 	current_window_width, current_window_height := glfw.GetWindowSize(window)
+
+	cam_x : f32= 0.0
+	cam_y : f32= 0.0
 
 	for (!glfw.WindowShouldClose(window) && running) {
 		frame_start_time = glfw.GetTime()
@@ -323,8 +290,19 @@ main :: proc() {
 
 		glfw.PollEvents()
 
-		model = glm.mat4Translate({0, 0, -5})
-		model *= glm.mat4Rotate({1, 1, 1}, glm.radians_f32(angle))
+		// view = glm.mat4Translate({0, 0, -(zoom_factor * frame_elapsed_time)})
+		view = glm.mat4LookAt({cam_x, cam_y, zoom_factor * 0.4}, {cam_x, cam_y, 0}, {0, 1, 0})
+		model = glm.mat4Rotate({0, 1, 0}, glm.radians_f32(angle))
+
+		if glfw.GetKey(window, glfw.KEY_W) == glfw.PRESS {
+			cam_y += 0.1 * frame_elapsed_time
+		} else if glfw.GetKey(window, glfw.KEY_S) == glfw.PRESS {
+			cam_y -= 0.1 * frame_elapsed_time
+		} else if glfw.GetKey(window, glfw.KEY_A) == glfw.PRESS {
+			cam_x -= 0.1 * frame_elapsed_time
+		} else if glfw.GetKey(window, glfw.KEY_D) == glfw.PRESS {
+			cam_x += 0.1 * frame_elapsed_time
+		}
 
 		angle += 1
 
@@ -334,14 +312,15 @@ main :: proc() {
 		pipeline_begin(&pipeline)
 		clear_color := [4]f32{0.2, 0.3, 0.3, 1.0}
 		pipeline_clear_render_target(&pipeline, &clear_color[0])
-		pipeline_set_vertex_buffer(&pipeline, 0, cube_vbo)
-		pipeline_set_vertex_buffer(&pipeline, 1, cube_vbo_color)
-		pipeline_set_element_buffer(&pipeline, cube_ebo)
+		pipeline_set_vertex_buffer(&pipeline, 0, model_vbo)
+
+		// pipeline_set_vertex_buffer(&pipeline, 1, cube_vbo_color)
+		pipeline_set_element_buffer(&pipeline, model_ebo)
 		pipeline_set_uniform_mat4(&pipeline, "uProjection", &projection[0][0])
 		pipeline_set_uniform_mat4(&pipeline, "uModel", &model[0][0])
 		pipeline_set_uniform_mat4(&pipeline, "uView", &view[0][0])
 
-		gl.DrawElements(gl.TRIANGLES, 36, gl.UNSIGNED_INT, nil)
+		gl.DrawElements(gl.TRIANGLES, i32(len(indices)), gl.UNSIGNED_INT, nil)
 
 		pipeline_end(&pipeline)
 
@@ -350,7 +329,7 @@ main :: proc() {
 		glfw.SwapBuffers((window))
 
 		frame_end_time = glfw.GetTime()
-		frame_elapsed_time := frame_end_time - frame_start_time
+		frame_elapsed_time = f32(frame_end_time - frame_start_time)
 
 		frame_count += 1
 
@@ -369,6 +348,10 @@ key_callback :: proc "c" (window: glfw.WindowHandle, key, scancode, action, mods
 
 size_callback :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
 	gl.Viewport(0, 0, width, height)
+}
+
+scroll_callback :: proc "c" (window: glfw.WindowHandle, xoffset, yoffset: f64) {
+	zoom_factor += f32(yoffset)	
 }
 
 gl_debug_callback :: proc "c" (
