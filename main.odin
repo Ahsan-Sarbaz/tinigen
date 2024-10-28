@@ -21,100 +21,15 @@ WINDOW_HEIGHT :: 1080
 running: b32 = true
 zoom_factor: f32 = 1.0
 
-Vertex :: struct {
-	position: glm.vec3,
-	normal:   glm.vec3,
-	texcoord: glm.vec2,
-}
-
-load_obj :: proc(
-	filepath: string,
-) -> (
-	vertices: [dynamic]Vertex,
-	indices: [dynamic]u32,
-	ok: bool,
-) {
-	data := os.read_entire_file(filepath, context.allocator) or_return
-	defer delete(data, context.allocator)
-
-	it := string(data)
-
-	positions := [dynamic]glm.vec3{}
-	uvs := [dynamic]glm.vec2{}
-	normals := [dynamic]glm.vec3{}
-
-	index: u32 = 0
-
-	for line in strings.split_lines_iterator(&it) {
-		if strings.starts_with(line, "v ") {
-			parts := strings.split(line, " ")
-			x := strconv.parse_f32(parts[1]) or_return
-			y := strconv.parse_f32(parts[2]) or_return
-			z := strconv.parse_f32(parts[3]) or_return
-			append(&positions, glm.vec3{x, y, z})
-
-		} else if strings.starts_with(line, "vt ") {
-			parts := strings.split(line, " ")
-			u := strconv.parse_f32(parts[1]) or_return
-			v := strconv.parse_f32(parts[2]) or_return
-			append(&uvs, glm.vec2{u, v})
-
-		} else if strings.starts_with(line, "vn ") {
-			parts := strings.split(line, " ")
-			nx := strconv.parse_f32(parts[1]) or_return
-			ny := strconv.parse_f32(parts[2]) or_return
-			nz := strconv.parse_f32(parts[3]) or_return
-			append(&normals, glm.vec3{nx, ny, nz})
-		} else if strings.starts_with(line, "f ") {
-			parts := strings.split(line, " ")
-
-			for i := 1; i <= 3; i += 1 {
-				v_t_n := strings.split(parts[i], "/")
-
-				position := glm.vec3{f32(0), f32(0), f32(0)}
-				texcoord := glm.vec2{f32(0), f32(0)}
-				normal := glm.vec3{f32(0), f32(0), f32(0)}
-
-				v := strconv.parse_i64(v_t_n[0]) or_return
-				position = positions[v - 1]
-
-				if len(v_t_n) == 2 {
-					if len(v_t_n[1]) > 0 {
-						t := strconv.parse_i64(v_t_n[1]) or_return
-						texcoord = uvs[t - 1]
-					}
-
-				} else if len(v_t_n) == 3 {
-					if len(v_t_n[1]) > 0 {
-						t := strconv.parse_i64(v_t_n[1]) or_return
-						texcoord = uvs[t - 1]
-					}
-
-					if len(v_t_n[2]) > 0 {
-						n := strconv.parse_i64(v_t_n[2]) or_return
-						normal = normals[n - 1]
-					}
-				}
-
-				append(&vertices, Vertex{position, normal, texcoord})
-				append(&indices, index)
-				index += 1
-			}
-		}
-	}
-
-	delete(positions)
-	delete(uvs)
-	delete(normals)
-
-	ok = true
-	return
-}
-
-
 main :: proc() {
+	if ok := main_with_ok(); !ok {
+		os.exit(1)
+	}
+}
 
-	model_filepath := "stanford-bunny.obj"
+main_with_ok :: proc() -> (ok: bool) {
+
+	model_filepath := "kitten.obj"
 
 	vertices, indices, loaded := load_obj(model_filepath)
 
@@ -158,44 +73,10 @@ main :: proc() {
 	gl.DebugMessageControl(gl.DONT_CARE, gl.DONT_CARE, gl.DONT_CARE, 0, nil, gl.FALSE)
 	gl.DebugMessageControl(gl.DEBUG_SOURCE_API, gl.DEBUG_TYPE_ERROR, gl.DONT_CARE, 0, nil, gl.TRUE)
 
+	vs_filepath := "./shaders/vs.vert.glsl"
+	fs_filepath := "./shaders/fs.frag.glsl"
 
-	vs_source := `#version 460
-    layout (location = 0) in vec3 aPos;
-	layout (location = 1) in vec3 aNormal;
-	layout (location = 2) in vec2 aTexCoords;
-	
-    uniform mat4 uProjection;
-    uniform mat4 uView;
-    uniform mat4 uModel;
-
-	out vec3 Normal;
-	out vec2 TexCoords;
-	
-    void main() {
-        gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
-		Normal = mat3(uModel) * aNormal;
-		// Normal = aNormal;
-		TexCoords = aTexCoords;
-    }
-    `
-
-
-	fs_source := `#version 460
-    out vec4 FragColor;
-
-	in vec3 Normal;
-	in vec2 TexCoords;
-
-    void main() {
-        FragColor = vec4(Normal, 1.0f);
-    }
-    `
-
-
-	program, ok := gl.load_shaders_source(vs_source, fs_source)
-	if !ok {
-		return
-	}
+	program := gl.load_shaders_file(vs_filepath, fs_filepath) or_return
 
 	model_vbo := create_buffer(u32(len(vertices) * size_of(Vertex)), raw_data(vertices), .Static)
 	model_ebo := create_buffer(u32(len(indices) * size_of(u32)), raw_data(indices), .Static)
@@ -207,7 +88,7 @@ main :: proc() {
 					width = WINDOW_WIDTH,
 					height = WINDOW_HEIGHT,
 					attachments = []FramebufferAttachment {
-						FramebufferAttachment{type = .Color, format = .RGBA8, handle = 0},
+						FramebufferAttachment{type = .Color, format = .RGBA32F, handle = 0},
 						FramebufferAttachment{type = .Depth, format = .Depth32, handle = 0},
 					},
 				},
@@ -276,6 +157,14 @@ main :: proc() {
 	cam_x : f32= 0.0
 	cam_y : f32= 0.0
 
+	fullscreen_blit_program := gl.load_shaders_file("./shaders/fullscreen_blit.vert.glsl", "./shaders/fullscreen_blit.frag.glsl") or_return
+
+	sobel_effect_program := gl.load_compute_file("./shaders/effects/sobel.comp.glsl") or_return
+	
+	sobel_effect_out_texture := create_texture_2d(WINDOW_WIDTH, WINDOW_HEIGHT, .RGBA32F, nil)
+
+	running = true
+
 	for (!glfw.WindowShouldClose(window) && running) {
 		frame_start_time = glfw.GetTime()
 
@@ -291,7 +180,7 @@ main :: proc() {
 		glfw.PollEvents()
 
 		// view = glm.mat4Translate({0, 0, -(zoom_factor * frame_elapsed_time)})
-		view = glm.mat4LookAt({cam_x, cam_y, zoom_factor * 0.4}, {cam_x, cam_y, 0}, {0, 1, 0})
+		view = glm.mat4LookAt({cam_x, cam_y, zoom_factor}, {cam_x, cam_y, 0}, {0, 1, 0})
 		model = glm.mat4Rotate({0, 1, 0}, glm.radians_f32(angle))
 
 		if glfw.GetKey(window, glfw.KEY_W) == glfw.PRESS {
@@ -313,8 +202,6 @@ main :: proc() {
 		clear_color := [4]f32{0.2, 0.3, 0.3, 1.0}
 		pipeline_clear_render_target(&pipeline, &clear_color[0])
 		pipeline_set_vertex_buffer(&pipeline, 0, model_vbo)
-
-		// pipeline_set_vertex_buffer(&pipeline, 1, cube_vbo_color)
 		pipeline_set_element_buffer(&pipeline, model_ebo)
 		pipeline_set_uniform_mat4(&pipeline, "uProjection", &projection[0][0])
 		pipeline_set_uniform_mat4(&pipeline, "uModel", &model[0][0])
@@ -324,7 +211,21 @@ main :: proc() {
 
 		pipeline_end(&pipeline)
 
-		pipeline_blit_onto_default(&pipeline, current_window_width, current_window_height)
+		gl.UseProgram(sobel_effect_program)
+
+
+		gl.BindImageTexture(0, pipeline.render_target.handle, 0, gl.FALSE, 0, gl.READ_ONLY, u32(pipeline.render_target.attachments[0].format))
+		gl.BindImageTexture(1, sobel_effect_out_texture.handle, 0, gl.FALSE, 0, gl.WRITE_ONLY, u32(sobel_effect_out_texture.format))
+		gl.DispatchCompute(WINDOW_WIDTH/8, WINDOW_HEIGHT/8, 1)
+
+		// i don't know what should i do here
+		gl.MemoryBarrier(gl.SHADER_IMAGE_ACCESS_BARRIER_BIT)
+
+		gl.UseProgram(fullscreen_blit_program)
+		gl.BindTexture(gl.TEXTURE_2D, sobel_effect_out_texture.handle)
+		gl.DrawArrays(gl.TRIANGLES, 0, 6)
+
+		// pipeline_blit_onto_default(&pipeline, current_window_width, current_window_height)
 
 		glfw.SwapBuffers((window))
 
@@ -338,6 +239,12 @@ main :: proc() {
 		}
 	}
 
+	glfw.DestroyWindow(window)
+
+	glfw.Terminate()
+
+	ok = true
+	return
 }
 
 key_callback :: proc "c" (window: glfw.WindowHandle, key, scancode, action, mods: i32) {

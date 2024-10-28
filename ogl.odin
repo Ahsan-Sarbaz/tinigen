@@ -385,7 +385,7 @@ FramebufferAttachmentType :: enum {
 	DepthStencil,
 }
 
-FramebufferAttachmentFormat :: enum {
+PixelFormat :: enum {
 	R32F             = gl.R32F,
 	R32I             = gl.R32I,
 	R32UI            = gl.R32UI,
@@ -415,7 +415,7 @@ FramebufferAttachmentFormat :: enum {
 
 FramebufferAttachment :: struct {
 	type:   FramebufferAttachmentType,
-	format: FramebufferAttachmentFormat,
+	format: PixelFormat,
 	handle: u32,
 	width:  i32,
 	height: i32,
@@ -527,4 +527,36 @@ pipeline_resize :: proc(pipeline: ^Pipeline, width, height: i32) {
             attachments = pipeline.render_target.attachments,
         })
     }
+}
+
+Texture2D :: struct {
+	handle: u32,
+	width:  i32,
+	height: i32,
+	format: PixelFormat,
+}
+
+create_texture_2d :: proc(width, height: i32, format: PixelFormat,  data: [^]u8) -> (texture: ^Texture2D) {
+	texture = new(Texture2D)
+	texture.width = width
+	texture.height = height
+	texture.format = format
+
+	gl.CreateTextures(gl.TEXTURE_2D, 1, &texture.handle)
+	gl.TextureStorage2D(texture.handle, 1, u32(format), width, height)
+	
+	if data != nil {
+		gl.TextureSubImage2D(texture.handle, 0, 0, 0, width, height, u32(format), gl.UNSIGNED_BYTE, data)
+	}
+	return
+}
+
+VertexArrayObject :: struct {
+	handle: u32,
+}
+
+create_vertex_array_object :: proc() -> (vao: ^VertexArrayObject) {
+	vao = new(VertexArrayObject)
+	gl.CreateVertexArrays(1, &vao.handle)
+	return
 }
