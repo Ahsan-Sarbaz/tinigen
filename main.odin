@@ -3,6 +3,7 @@ package tinigen
 import "core:fmt"
 
 import "base:runtime"
+import "core:time"
 
 import gl "vendor:OpenGL"
 import "vendor:glfw"
@@ -29,15 +30,18 @@ main :: proc() {
 
 main_with_ok :: proc() -> (ok: bool) {
 
-	model_filepath := "kitten.obj"
+	model_filepath := "Duck.gltf"
 
-	vertices, indices, loaded := load_obj(model_filepath)
+	start := time.now()
+	vertices, indices, loaded := load_model(model_filepath)
+
 
 	if !loaded {
 		fmt.printfln("Failed to load %s", model_filepath)
 		return
 	}
 
+	fmt.printfln("Loaded %s in %f seconds", model_filepath, time.since(start))
 	fmt.printfln("Loaded %d vertices %d indices", len(vertices), len(indices))
 
 	glfw.WindowHint(glfw.RESIZABLE, 1)
@@ -180,7 +184,7 @@ main_with_ok :: proc() -> (ok: bool) {
 		glfw.PollEvents()
 
 		// view = glm.mat4Translate({0, 0, -(zoom_factor * frame_elapsed_time)})
-		view = glm.mat4LookAt({cam_x, cam_y, zoom_factor}, {cam_x, cam_y, 0}, {0, 1, 0})
+		view = glm.mat4LookAt({cam_x, cam_y, zoom_factor * 400}, {cam_x, cam_y, 0}, {0, 1, 0})
 		model = glm.mat4Rotate({0, 1, 0}, glm.radians_f32(angle))
 
 		if glfw.GetKey(window, glfw.KEY_W) == glfw.PRESS {
@@ -211,18 +215,18 @@ main_with_ok :: proc() -> (ok: bool) {
 
 		pipeline_end(&pipeline)
 
-		gl.UseProgram(sobel_effect_program)
+		// gl.UseProgram(sobel_effect_program)
 
 
-		gl.BindImageTexture(0, pipeline.render_target.handle, 0, gl.FALSE, 0, gl.READ_ONLY, u32(pipeline.render_target.attachments[0].format))
-		gl.BindImageTexture(1, sobel_effect_out_texture.handle, 0, gl.FALSE, 0, gl.WRITE_ONLY, u32(sobel_effect_out_texture.format))
-		gl.DispatchCompute(WINDOW_WIDTH/8, WINDOW_HEIGHT/8, 1)
+		// gl.BindImageTexture(0, pipeline.render_target.handle, 0, gl.FALSE, 0, gl.READ_ONLY, u32(pipeline.render_target.attachments[0].format))
+		// gl.BindImageTexture(1, sobel_effect_out_texture.handle, 0, gl.FALSE, 0, gl.WRITE_ONLY, u32(sobel_effect_out_texture.format))
+		// gl.DispatchCompute(WINDOW_WIDTH/8, WINDOW_HEIGHT/8, 1)
 
 		// i don't know what should i do here
-		gl.MemoryBarrier(gl.SHADER_IMAGE_ACCESS_BARRIER_BIT)
+		// gl.MemoryBarrier(gl.SHADER_IMAGE_ACCESS_BARRIER_BIT)
 
 		gl.UseProgram(fullscreen_blit_program)
-		gl.BindTexture(gl.TEXTURE_2D, sobel_effect_out_texture.handle)
+		gl.BindTexture(gl.TEXTURE_2D, pipeline.render_target.attachments[0].handle)
 		gl.DrawArrays(gl.TRIANGLES, 0, 6)
 
 		// pipeline_blit_onto_default(&pipeline, current_window_width, current_window_height)

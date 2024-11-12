@@ -3,13 +3,34 @@ package tinigen
 import glm "core:math/linalg/glsl"
 
 import "core:os"
+import "core:fmt"
+import "core:mem"
 import "core:strconv"
 import "core:strings"
+import	"vendor:cgltf"
 
 Vertex :: struct {
 	position: glm.vec3,
 	normal:   glm.vec3,
 	texcoord: glm.vec2,
+}
+
+load_model :: proc(
+	filepath: string,
+) -> (
+	vertices: [dynamic]Vertex,
+	indices: [dynamic]u32,
+	ok: bool,
+) {
+
+	if strings.ends_with(filepath, ".obj") {
+		return load_obj(filepath)
+	} else if strings.ends_with(filepath, ".gltf") {
+		return load_gltf(filepath)
+	}
+	
+	ok = false
+	return
 }
 
 load_obj :: proc(
@@ -167,3 +188,84 @@ load_obj :: proc(
 	ok = true
 	return
 }
+
+load_gltf :: proc (filepath :string) -> (vertices: [dynamic]Vertex, indices: [dynamic]u32, ok: bool) {
+
+	filepath_cstring := strings.clone_to_cstring(filepath)
+
+	options := cgltf.options{}
+	out, result := cgltf.parse_file(options, filepath_cstring)
+
+	if result != cgltf.result.success {
+		ok = false
+		return
+	}
+
+	result = cgltf.load_buffers(options, out, filepath_cstring)
+	if result != cgltf.result.success {
+		ok = false
+		return
+	}
+
+	scene := out.scenes[0]
+	nodes := scene.nodes
+
+	count := 0
+	positions : [^]glm.vec3 = nil
+	uvs : [^]glm.vec2 = nil
+	normals :[^]glm.vec3 = nil
+
+	for i in 0..<len(nodes) {
+		node := nodes[i]
+
+		for j in 0..<len(node.children) {
+			child := node.children[j]
+			mesh := child.mesh
+			if mesh == nil {
+				continue
+			}
+						
+			for primitive in mesh.primitives {
+				if primitive.type == .triangles {
+					model_indices := transmute([^]u16) primitive.indices.buffer_view.buffer.data
+					model_indices = mem.ptr_offset(model_indices, primitive.indices.buffer_view.offset / size_of(u16))
+
+					reserve(&indices, primitive.indices.count)
+					for x in 0..<primitive.indices.count {
+						index := model_indices[x]
+						append(&indices, u32(index))
+					}
+
+					for attribute in primitive.attributes {
+						accessor := attribute.data
+						view := accessor.buffer_view
+						buffer := view.buffer
+						
+						if attribute.type == .normal {
+							data := transmute([^]glm.vec3) buffer.data
+							normals = mem.ptr_offset(data, accessor.offset/ size_of(glm.vec3))
+						} else if attribute.type == .texcoord {
+							data := transmute([^]glm.vec2) buffer.data
+							uvs = mem.ptr_offset(data, accessor.offset/ size_of(glm.vec2))
+						} else if attribute.type == .position {
+							data := transmute([^]glm.vec3) buffer.data
+							positions = mem.ptr_offset(data, accessor.offset / size_of(glm.vec3))
+							count = int(accessor.count)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	reserve(&vertices, count)
+	for i in 0..<count {
+		append(&vertices, Vertex{positions[i], normals[i], uvs[i]})
+	}
+
+	cgltf.free(out)
+
+	ok = true
+	return
+}
+
