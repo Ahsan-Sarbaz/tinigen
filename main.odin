@@ -30,11 +30,10 @@ main :: proc() {
 
 main_with_ok :: proc() -> (ok: bool) {
 
-	model_filepath := "Duck.gltf"
+	model_filepath := "models/WaterBottle.gltf"
 
 	start := time.now()
-	vertices, indices, loaded := load_model(model_filepath)
-
+	meshes, loaded := load_model(model_filepath)
 
 	if !loaded {
 		fmt.printfln("Failed to load %s", model_filepath)
@@ -42,7 +41,9 @@ main_with_ok :: proc() -> (ok: bool) {
 	}
 
 	fmt.printfln("Loaded %s in %f seconds", model_filepath, time.since(start))
-	fmt.printfln("Loaded %d vertices %d indices", len(vertices), len(indices))
+	for mesh in meshes {
+		fmt.printfln("Loaded %d vertices %d indices", len(mesh.vertices), len(mesh.indices))
+	}
 
 	glfw.WindowHint(glfw.RESIZABLE, 1)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, GL_MAJOR_VERSION)
@@ -82,8 +83,7 @@ main_with_ok :: proc() -> (ok: bool) {
 
 	program := gl.load_shaders_file(vs_filepath, fs_filepath) or_return
 
-	model_vbo := create_buffer(u32(len(vertices) * size_of(Vertex)), raw_data(vertices), .Static)
-	model_ebo := create_buffer(u32(len(indices) * size_of(u32)), raw_data(indices), .Static)
+	gpu_meshes := upload_mesh_to_gpu(meshes[:]) or_return
 
 	pipeline := create_pipeline(
 		PipelineDescription {
@@ -184,7 +184,7 @@ main_with_ok :: proc() -> (ok: bool) {
 		glfw.PollEvents()
 
 		// view = glm.mat4Translate({0, 0, -(zoom_factor * frame_elapsed_time)})
-		view = glm.mat4LookAt({cam_x, cam_y, zoom_factor * 400}, {cam_x, cam_y, 0}, {0, 1, 0})
+		view = glm.mat4LookAt({cam_x, cam_y, zoom_factor * 0.3}, {cam_x, cam_y, 0}, {0, 1, 0})
 		model = glm.mat4Rotate({0, 1, 0}, glm.radians_f32(angle))
 
 		if glfw.GetKey(window, glfw.KEY_W) == glfw.PRESS {
@@ -205,13 +205,17 @@ main_with_ok :: proc() -> (ok: bool) {
 		pipeline_begin(&pipeline)
 		clear_color := [4]f32{0.2, 0.3, 0.3, 1.0}
 		pipeline_clear_render_target(&pipeline, &clear_color[0])
-		pipeline_set_vertex_buffer(&pipeline, 0, model_vbo)
-		pipeline_set_element_buffer(&pipeline, model_ebo)
+		
 		pipeline_set_uniform_mat4(&pipeline, "uProjection", &projection[0][0])
 		pipeline_set_uniform_mat4(&pipeline, "uModel", &model[0][0])
 		pipeline_set_uniform_mat4(&pipeline, "uView", &view[0][0])
 
-		gl.DrawElements(gl.TRIANGLES, i32(len(indices)), gl.UNSIGNED_INT, nil)
+		for mesh in gpu_meshes {
+			pipeline_set_vertex_buffer(&pipeline, 0, mesh.vbo)
+			pipeline_set_element_buffer(&pipeline, mesh.ebo)
+	
+			gl.DrawElements(gl.TRIANGLES, i32(mesh.ebo.count), gl.UNSIGNED_INT, nil)				
+		}
 
 		pipeline_end(&pipeline)
 
@@ -262,7 +266,7 @@ size_callback :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
 }
 
 scroll_callback :: proc "c" (window: glfw.WindowHandle, xoffset, yoffset: f64) {
-	zoom_factor += f32(yoffset)	
+	zoom_factor += f32(yoffset)
 }
 
 gl_debug_callback :: proc "c" (

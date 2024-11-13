@@ -2,12 +2,12 @@ package tinigen
 
 import glm "core:math/linalg/glsl"
 
-import "core:os"
 import "core:fmt"
 import "core:mem"
+import "core:os"
 import "core:strconv"
 import "core:strings"
-import	"vendor:cgltf"
+import "vendor:cgltf"
 
 Vertex :: struct {
 	position: glm.vec3,
@@ -15,31 +15,24 @@ Vertex :: struct {
 	texcoord: glm.vec2,
 }
 
-load_model :: proc(
-	filepath: string,
-) -> (
+Mesh :: struct {
 	vertices: [dynamic]Vertex,
-	indices: [dynamic]u32,
-	ok: bool,
-) {
+	indices:  [dynamic]u32,
+}
+
+load_model :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 
 	if strings.ends_with(filepath, ".obj") {
 		return load_obj(filepath)
 	} else if strings.ends_with(filepath, ".gltf") {
 		return load_gltf(filepath)
 	}
-	
+
 	ok = false
 	return
 }
 
-load_obj :: proc(
-	filepath: string,
-) -> (
-	vertices: [dynamic]Vertex,
-	indices: [dynamic]u32,
-	ok: bool,
-) {
+load_obj :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 	data := os.read_entire_file(filepath, context.allocator) or_return
 	defer delete(data, context.allocator)
 
@@ -48,6 +41,8 @@ load_obj :: proc(
 	positions := [dynamic]glm.vec3{}
 	uvs := [dynamic]glm.vec2{}
 	normals := [dynamic]glm.vec3{}
+
+	mesh := Mesh{}
 
 	index: u32 = 0
 
@@ -64,7 +59,7 @@ load_obj :: proc(
 			} else {
 				pos := [3]f32{}
 				j := 0
-				for i in 1..<len(parts) {
+				for i in 1 ..< len(parts) {
 					part := parts[i]
 					if part == "" {
 						continue
@@ -72,7 +67,7 @@ load_obj :: proc(
 					pos[j] = strconv.parse_f32(part) or_return
 					j += 1
 				}
-				append(&positions, glm.vec3{pos[0], pos[1], pos[2]})	
+				append(&positions, glm.vec3{pos[0], pos[1], pos[2]})
 			}
 
 		} else if strings.starts_with(line, "vt ") {
@@ -86,7 +81,7 @@ load_obj :: proc(
 				// some exporters use vt 0.0 0.0 0.0
 				uv := [3]f32{}
 				j := 0
-				for i in 1..<len(parts) {
+				for i in 1 ..< len(parts) {
 					part := parts[i]
 					if part == "" {
 						continue
@@ -94,7 +89,7 @@ load_obj :: proc(
 					uv[j] = strconv.parse_f32(part) or_return
 					j += 1
 				}
-				append(&uvs, glm.vec2{uv[0], uv[1]})	
+				append(&uvs, glm.vec2{uv[0], uv[1]})
 			}
 
 		} else if strings.starts_with(line, "vn ") {
@@ -108,7 +103,7 @@ load_obj :: proc(
 			} else {
 				norm := [3]f32{}
 				j := 0
-				for i in 1..<len(parts) {
+				for i in 1 ..< len(parts) {
 					part := parts[i]
 					if part == "" {
 						continue
@@ -116,7 +111,7 @@ load_obj :: proc(
 					norm[j] = strconv.parse_f32(part) or_return
 					j += 1
 				}
-				append(&normals, glm.vec3{norm[0], norm[1], norm[2]})	
+				append(&normals, glm.vec3{norm[0], norm[1], norm[2]})
 			}
 
 
@@ -135,9 +130,12 @@ load_obj :: proc(
 					if vertex_count == 4 {
 						if i >= 3 {
 							switch i {
-								case 3: part_index = 1
-								case 4: part_index = 3
-								case 5: part_index = 4
+							case 3:
+								part_index = 1
+							case 4:
+								part_index = 3
+							case 5:
+								part_index = 4
 							}
 						} else {
 							part_index = i + 1
@@ -172,11 +170,11 @@ load_obj :: proc(
 						}
 					}
 
-					append(&vertices, Vertex{position, normal, texcoord})
-					append(&indices, index)
+					append(&mesh.vertices, Vertex{position, normal, texcoord})
+					append(&mesh.indices, index)
 					index += 1
 				}
-				
+
 			}
 		}
 	}
@@ -185,11 +183,13 @@ load_obj :: proc(
 	delete(uvs)
 	delete(normals)
 
+	append(&meshes, mesh)
+
 	ok = true
 	return
 }
 
-load_gltf :: proc (filepath :string) -> (vertices: [dynamic]Vertex, indices: [dynamic]u32, ok: bool) {
+load_gltf :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 
 	filepath_cstring := strings.clone_to_cstring(filepath)
 
@@ -207,61 +207,92 @@ load_gltf :: proc (filepath :string) -> (vertices: [dynamic]Vertex, indices: [dy
 		return
 	}
 
-	scene := out.scenes[0]
-	nodes := scene.nodes
+	for mesh in out.meshes {
+		count := 0
+		positions: [^]glm.vec3 = nil
+		uvs: [^]glm.vec2 = nil
+		normals: [^]glm.vec3 = nil
 
-	count := 0
-	positions : [^]glm.vec3 = nil
-	uvs : [^]glm.vec2 = nil
-	normals :[^]glm.vec3 = nil
+		m := Mesh{}
 
-	for i in 0..<len(nodes) {
-		node := nodes[i]
+		for primitive in mesh.primitives {
+			if primitive.type == .triangles {
+				{
+					accessor := primitive.indices
+					reserve(&m.indices, accessor.count)
 
-		for j in 0..<len(node.children) {
-			child := node.children[j]
-			mesh := child.mesh
-			if mesh == nil {
-				continue
-			}
-						
-			for primitive in mesh.primitives {
-				if primitive.type == .triangles {
-					model_indices := transmute([^]u16) primitive.indices.buffer_view.buffer.data
-					model_indices = mem.ptr_offset(model_indices, primitive.indices.buffer_view.offset / size_of(u16))
+					if accessor.component_type == .r_16u {
+						model_indices := transmute([^]u16) get_accessor_data(accessor)
+						for x in 0 ..< accessor.count {
+							append(&m.indices, u32(model_indices[x]))
+						}
+					} else if accessor.component_type == .r_32u {
+						model_indices := transmute([^]u32) get_accessor_data(accessor)
+						for x in 0 ..< accessor.count {
+							append(&m.indices, model_indices[x])
+						}
 
-					reserve(&indices, primitive.indices.count)
-					for x in 0..<primitive.indices.count {
-						index := model_indices[x]
-						append(&indices, u32(index))
+						fmt.printfln("Using u32 indices")
 					}
 
-					for attribute in primitive.attributes {
-						accessor := attribute.data
-						view := accessor.buffer_view
-						buffer := view.buffer
-						
-						if attribute.type == .normal {
-							data := transmute([^]glm.vec3) buffer.data
-							normals = mem.ptr_offset(data, accessor.offset/ size_of(glm.vec3))
-						} else if attribute.type == .texcoord {
-							data := transmute([^]glm.vec2) buffer.data
-							uvs = mem.ptr_offset(data, accessor.offset/ size_of(glm.vec2))
-						} else if attribute.type == .position {
-							data := transmute([^]glm.vec3) buffer.data
-							positions = mem.ptr_offset(data, accessor.offset / size_of(glm.vec3))
-							count = int(accessor.count)
-						}
+				}
+
+				for attribute in primitive.attributes {
+					accessor := attribute.data
+					if attribute.type == .normal && accessor.type == .vec3 {
+						normals = transmute([^]glm.vec3) get_accessor_data(accessor)
+					} else if attribute.type == .texcoord && accessor.type == .vec2 {
+						uvs = transmute([^]glm.vec2) get_accessor_data(accessor)
+					} else if attribute.type == .position && accessor.type == .vec3 {
+						positions = transmute([^]glm.vec3) get_accessor_data(accessor)
+						count = int(accessor.count)
 					}
 				}
+			} else {
+				fmt.printfln("Unsupported primitive type: %v", primitive.type)
 			}
 		}
+
+		if positions == nil {
+			fmt.printfln("No position attribute found")
+			ok = false
+			return
+		}
+
+		free_normals := (normals == nil)
+
+		if normals == nil {
+			fmt.printfln("No normal attribute found")
+
+			normals_buffer, _ := mem.alloc(size_of(glm.vec3) * count)
+			normals = transmute([^]glm.vec3)normals_buffer
+			return
+		}
+
+		free_uvs := (uvs == nil)
+
+		if uvs == nil {
+			fmt.printfln("No texcoord attribute found")
+			uvs_buffer, _ := mem.alloc(size_of(glm.vec2) * count)
+			uvs = transmute([^]glm.vec2)uvs_buffer
+		}
+
+		reserve(&m.vertices, count)
+		for i in 0 ..< count {
+			append(&m.vertices, Vertex{positions[i], normals[i], uvs[i]})
+		}
+
+		if free_uvs {
+			free(uvs)
+		}
+
+		if free_normals {
+			free(normals)
+		}
+
+		append(&meshes, m)
 	}
 
-	reserve(&vertices, count)
-	for i in 0..<count {
-		append(&vertices, Vertex{positions[i], normals[i], uvs[i]})
-	}
 
 	cgltf.free(out)
 
@@ -269,3 +300,50 @@ load_gltf :: proc (filepath :string) -> (vertices: [dynamic]Vertex, indices: [dy
 	return
 }
 
+get_accessor_data :: proc(accessor: ^cgltf.accessor) -> rawptr {
+	buffer := accessor.buffer_view.buffer
+	offset := accessor.offset + accessor.buffer_view.offset
+	data := u64(uintptr(buffer.data)) + u64(offset)
+	return rawptr(uintptr(data))	
+}
+
+GpuMesh :: struct {
+	vbo: GpuBuffer,
+	ebo: GpuBuffer,
+}
+
+upload_mesh_to_gpu_single :: proc(mesh: Mesh) -> (out: GpuMesh, ok: bool) {
+
+	model_vbo := create_buffer(
+		u32(len(mesh.vertices)),
+		size_of(Vertex),
+		raw_data(mesh.vertices),
+		.Static,
+	)
+	model_ebo := create_buffer(
+		u32(len(mesh.indices)),
+		size_of(u32),
+		raw_data(mesh.indices),
+		.Static,
+	)
+
+	out = GpuMesh{model_vbo, model_ebo}
+
+	ok = true
+	return
+}
+
+upload_mesh_to_gpu_list :: proc(meshes: []Mesh) -> (out: [dynamic]GpuMesh, ok: bool) {
+	reserve(&out, len(meshes))
+	for mesh in meshes {
+		mesh_gpu := upload_mesh_to_gpu_single(mesh) or_return
+		append(&out, mesh_gpu)
+	}
+	ok = true
+	return
+}
+
+upload_mesh_to_gpu :: proc {
+	upload_mesh_to_gpu_list,
+	upload_mesh_to_gpu_single,
+}

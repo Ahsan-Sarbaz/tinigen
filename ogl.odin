@@ -14,11 +14,13 @@ BufferUsage :: enum {
 GpuBuffer :: struct {
 	handle: u32,
 	size:   u32,
+	count: 	u32,
 	usage:  BufferUsage,
 }
 
-create_buffer :: proc(size: u32, data: rawptr, usage: BufferUsage) -> (buffer: GpuBuffer) {
-	buffer.size = size
+create_buffer :: proc(count: u32, size_per_element: u32, data: rawptr, usage: BufferUsage) -> (buffer: GpuBuffer) {
+	buffer.size = count * size_per_element
+	buffer.count = count
 	buffer.usage = usage
 	flags: u32 = 0
 
