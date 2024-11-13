@@ -5,6 +5,15 @@ out vec4 FragColor;
 in vec3 Normal;
 in vec2 TexCoords;
 
+uniform sampler2D uDiffuseTexture;
+uniform sampler2D uNormalTexture;
+
 void main() {
-    FragColor = vec4(Normal, 1.0f);
+    vec3 diffuse = texture(uDiffuseTexture, TexCoords).rgb;
+    vec3 normal = texture(uNormalTexture, TexCoords).rgb;
+    vec4 color = vec4(normal + diffuse, 1.0f);
+
+    // gamma correction
+    color.rgb = pow(color.rgb, vec3(1.0f / 2.2f));
+    FragColor = color;
 }

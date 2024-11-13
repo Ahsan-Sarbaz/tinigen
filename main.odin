@@ -30,20 +30,6 @@ main :: proc() {
 
 main_with_ok :: proc() -> (ok: bool) {
 
-	model_filepath := "models/WaterBottle.gltf"
-
-	start := time.now()
-	meshes, loaded := load_model(model_filepath)
-
-	if !loaded {
-		fmt.printfln("Failed to load %s", model_filepath)
-		return
-	}
-
-	fmt.printfln("Loaded %s in %f seconds", model_filepath, time.since(start))
-	for mesh in meshes {
-		fmt.printfln("Loaded %d vertices %d indices", len(mesh.vertices), len(mesh.indices))
-	}
 
 	glfw.WindowHint(glfw.RESIZABLE, 1)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, GL_MAJOR_VERSION)
@@ -77,6 +63,21 @@ main_with_ok :: proc() -> (ok: bool) {
 	gl.Enable(gl.DEBUG_OUTPUT_SYNCHRONOUS)
 	gl.DebugMessageControl(gl.DONT_CARE, gl.DONT_CARE, gl.DONT_CARE, 0, nil, gl.FALSE)
 	gl.DebugMessageControl(gl.DEBUG_SOURCE_API, gl.DEBUG_TYPE_ERROR, gl.DONT_CARE, 0, nil, gl.TRUE)
+
+	model_filepath := "models/WaterBottle.gltf"
+
+	start := time.now()
+	meshes, loaded := load_model(model_filepath)
+
+	if !loaded {
+		fmt.printfln("Failed to load %s", model_filepath)
+		return
+	}
+
+	fmt.printfln("Loaded %s in %f seconds", model_filepath, time.since(start))
+	for mesh in meshes {
+		fmt.printfln("Loaded %d vertices %d indices", len(mesh.vertices), len(mesh.indices))
+	}
 
 	vs_filepath := "./shaders/vs.vert.glsl"
 	fs_filepath := "./shaders/fs.frag.glsl"
@@ -165,7 +166,7 @@ main_with_ok :: proc() -> (ok: bool) {
 
 	sobel_effect_program := gl.load_compute_file("./shaders/effects/sobel.comp.glsl") or_return
 	
-	sobel_effect_out_texture := create_texture_2d(WINDOW_WIDTH, WINDOW_HEIGHT, .RGBA32F, nil)
+	sobel_effect_out_texture := create_texture_2d(WINDOW_WIDTH, WINDOW_HEIGHT, .RGBA, .RGBA32F,  nil)
 
 	running = true
 
@@ -210,10 +211,13 @@ main_with_ok :: proc() -> (ok: bool) {
 		pipeline_set_uniform_mat4(&pipeline, "uModel", &model[0][0])
 		pipeline_set_uniform_mat4(&pipeline, "uView", &view[0][0])
 
-		for mesh in gpu_meshes {
+		for mesh, index in gpu_meshes {
 			pipeline_set_vertex_buffer(&pipeline, 0, mesh.vbo)
 			pipeline_set_element_buffer(&pipeline, mesh.ebo)
-	
+
+			pipeline_bind_texture2d(&pipeline, "uDiffuseTexture", 0, meshes[index].meterial.diffuse_texture)
+			pipeline_bind_texture2d(&pipeline, "uNormalTexture", 1, meshes[index].meterial.normal_texture)
+
 			gl.DrawElements(gl.TRIANGLES, i32(mesh.ebo.count), gl.UNSIGNED_INT, nil)				
 		}
 

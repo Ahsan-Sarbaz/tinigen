@@ -5,9 +5,12 @@ import glm "core:math/linalg/glsl"
 import "core:fmt"
 import "core:mem"
 import "core:os"
+import "core:path/filepath"
 import "core:strconv"
 import "core:strings"
 import "vendor:cgltf"
+import "vendor:stb/image"
+import "core:c"
 
 Vertex :: struct {
 	position: glm.vec3,
@@ -18,6 +21,7 @@ Vertex :: struct {
 Mesh :: struct {
 	vertices: [dynamic]Vertex,
 	indices:  [dynamic]u32,
+	meterial: Material
 }
 
 load_model :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
@@ -189,33 +193,45 @@ load_obj :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 	return
 }
 
-load_gltf :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
+Material :: struct {
+	diffuse_texture : ^Texture2D,
+	normal_texture : ^Texture2D,
+}
 
-	filepath_cstring := strings.clone_to_cstring(filepath)
+load_gltf :: proc(gltf_filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
+
+	gltf_filepath_cstring := strings.clone_to_cstring(gltf_filepath)
 
 	options := cgltf.options{}
-	out, result := cgltf.parse_file(options, filepath_cstring)
+	out, result := cgltf.parse_file(options, gltf_filepath_cstring)
 
 	if result != cgltf.result.success {
 		ok = false
 		return
 	}
 
-	result = cgltf.load_buffers(options, out, filepath_cstring)
+	result = cgltf.load_buffers(options, out, gltf_filepath_cstring)
 	if result != cgltf.result.success {
 		ok = false
 		return
 	}
 
-	for mesh in out.meshes {
+	relative_path := filepath.dir(gltf_filepath)
+
+	for mesh_index in 0..<len(out.meshes) {
 		count := 0
 		positions: [^]glm.vec3 = nil
 		uvs: [^]glm.vec2 = nil
 		normals: [^]glm.vec3 = nil
 
+		mesh := out.meshes[mesh_index]
 		m := Mesh{}
 
-		for primitive in mesh.primitives {
+		for primitive_index in 0..<len(mesh.primitives) {
+			primitive := mesh.primitives[primitive_index]
+
+			m.meterial = load_material(primitive.material, relative_path) or_return
+
 			if primitive.type == .triangles {
 				{
 					accessor := primitive.indices
@@ -251,6 +267,9 @@ load_gltf :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 			} else {
 				fmt.printfln("Unsupported primitive type: %v", primitive.type)
 			}
+
+			// right now we only support one primitive per mesh
+			break
 		}
 
 		if positions == nil {
@@ -295,6 +314,63 @@ load_gltf :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 
 
 	cgltf.free(out)
+
+	ok = true
+	return
+}
+
+load_pixel_from_file :: proc(filepath: string, desired_channels : i32) -> (data: [^]byte, w, h, channels: i32, ok: bool) {
+	file_data, err := os.read_entire_file(filepath)
+	if file_data == nil {
+		ok = false
+		return
+	}
+
+	defer delete(file_data)
+
+	width : c.int = 0
+	height : c.int = 0
+	_desired_channels: c.int = desired_channels
+	pixels := image.load_from_memory(raw_data(file_data), i32(len(file_data)), &width, &height, nil, _desired_channels)
+
+	if pixels == nil {
+		ok = false
+		return
+	}
+
+	w = width
+	h = height
+	channels = desired_channels
+	data = pixels
+	ok = true
+	return
+}
+
+load_material :: proc (gltf_material : ^cgltf.material, relative_path: string) -> (material: Material, ok:bool) {
+
+	{
+		path,_ := filepath.join({relative_path, string(gltf_material.normal_texture.texture.image_.uri)})
+		pixels, w, h, c := load_pixel_from_file(path, 4) or_return	
+		fmt.printfln("Loaded Normal Map %s %d x %d", path, w, h)
+
+		material.normal_texture = create_texture_2d(w, h, .RGBA, .RGBA8, pixels)
+	}
+
+	if (gltf_material.has_pbr_metallic_roughness) {
+		path,_ := filepath.join({relative_path, string(gltf_material.pbr_metallic_roughness.base_color_texture.texture.image_.uri)})
+		pixels, w, h, c := load_pixel_from_file(path, 4) or_return
+		fmt.printfln("Loaded Base Color Map %s %d x %d", path, w, h)
+		
+		material.diffuse_texture = create_texture_2d(w, h, .RGBA, .RGBA8, pixels)
+	}
+
+	if (gltf_material.has_pbr_specular_glossiness) {
+		path,_ := filepath.join({relative_path, string(gltf_material.pbr_specular_glossiness.diffuse_texture.texture.image_.uri)})
+		pixels, w, h, c := load_pixel_from_file(path, 4) or_return
+		fmt.printfln("Loaded Diffuse Map %s %d x %d", path, w, h)
+
+		material.diffuse_texture = create_texture_2d(w, h, .RGBA, .RGBA8, pixels)
+	}
 
 	ok = true
 	return

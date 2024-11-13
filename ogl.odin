@@ -14,11 +14,18 @@ BufferUsage :: enum {
 GpuBuffer :: struct {
 	handle: u32,
 	size:   u32,
-	count: 	u32,
+	count:  u32,
 	usage:  BufferUsage,
 }
 
-create_buffer :: proc(count: u32, size_per_element: u32, data: rawptr, usage: BufferUsage) -> (buffer: GpuBuffer) {
+create_buffer :: proc(
+	count: u32,
+	size_per_element: u32,
+	data: rawptr,
+	usage: BufferUsage,
+) -> (
+	buffer: GpuBuffer,
+) {
 	buffer.size = count * size_per_element
 	buffer.count = count
 	buffer.usage = usage
@@ -309,8 +316,8 @@ pipeline_begin :: proc(pipeline: ^Pipeline) {
 	}
 
 
-    gl.PolygonMode(gl.FRONT, u32(pipeline.state.front_polygon_mode))
-    gl.PolygonMode(gl.BACK, u32(pipeline.state.back_polygon_mode))
+	gl.PolygonMode(gl.FRONT, u32(pipeline.state.front_polygon_mode))
+	gl.PolygonMode(gl.BACK, u32(pipeline.state.back_polygon_mode))
 
 	if (pipeline.render_target != nil) {
 		gl.BindFramebuffer(gl.FRAMEBUFFER, pipeline.render_target.handle)
@@ -361,6 +368,36 @@ pipeline_set_uniform_mat4 :: proc(pipeline: ^Pipeline, name: string, value: [^]f
 	gl.ProgramUniformMatrix4fv(pipeline.program, loc, 1, gl.FALSE, value)
 }
 
+pipeline_set_uniform_vec4 :: proc(pipeline: ^Pipeline, name: string, value: [^]f32) {
+	loc, ok := pipeline.uniform_locations[name]
+	if (!ok) {
+		loc = gl.GetUniformLocation(pipeline.program, strings.unsafe_string_to_cstring(name))
+		if (loc == -1) {
+			fmt.println("Could not find uniform variable", name)
+			return
+		}
+
+		pipeline.uniform_locations[name] = loc
+	}
+
+	gl.ProgramUniform4fv(pipeline.program, loc, 1, value)
+}
+
+pipeline_set_uniform_int :: proc(pipeline: ^Pipeline, name: string, value: i32) {
+	loc, ok := pipeline.uniform_locations[name]
+	if (!ok) {
+		loc = gl.GetUniformLocation(pipeline.program, strings.unsafe_string_to_cstring(name))
+		if (loc == -1) {
+			fmt.println("Could not find uniform variable", name)
+			return
+		}
+
+		pipeline.uniform_locations[name] = loc
+	}
+
+	gl.ProgramUniform1i(pipeline.program, loc, value)
+}
+
 pipeline_blit_onto_default :: proc(pipeline: ^Pipeline, dstWidth: i32, dstHeight: i32) {
 	gl.BindFramebuffer(gl.READ_FRAMEBUFFER, pipeline.render_target.handle)
 	gl.BindFramebuffer(gl.DRAW_FRAMEBUFFER, 0)
@@ -380,6 +417,11 @@ pipeline_blit_onto_default :: proc(pipeline: ^Pipeline, dstWidth: i32, dstHeight
 	)
 }
 
+pipeline_bind_texture2d :: proc(pipeline: ^Pipeline, name: string, unit: i32, texture: ^Texture2D) {
+	gl.BindTextureUnit(u32(unit), texture.handle)
+	pipeline_set_uniform_int(pipeline, name, unit)
+}
+
 FramebufferAttachmentType :: enum {
 	Color,
 	Depth,
@@ -396,6 +438,7 @@ PixelFormat :: enum {
 	RG32UI           = gl.RG32UI,
 	RGBA8I           = gl.RGBA8I,
 	RGBA8UI          = gl.RGBA8UI,
+	RGBA             = gl.RGBA,
 	RGBA8            = gl.RGBA8,
 	RGBA16F          = gl.RGBA16F,
 	RGBA32F          = gl.RGBA32F,
@@ -451,7 +494,7 @@ create_framebuffer_attachment :: proc(attachment: ^FramebufferAttachment, width,
 }
 
 create_framebuffer :: proc(desc: FramebufferDescription) -> (framebuffer: ^Framebuffer) {
-    framebuffer = new(Framebuffer)
+	framebuffer = new(Framebuffer)
 
 	framebuffer.width = desc.width
 	framebuffer.height = desc.height
@@ -491,16 +534,21 @@ create_framebuffer :: proc(desc: FramebufferDescription) -> (framebuffer: ^Frame
 }
 
 framebuffer_destroy :: proc(framebuffer: ^Framebuffer) {
-    gl.DeleteFramebuffers(1, &framebuffer.handle)
+	gl.DeleteFramebuffers(1, &framebuffer.handle)
 
-    for &attachment in framebuffer.attachments {
-        gl.DeleteTextures(1, &attachment.handle)
-    }
+	for &attachment in framebuffer.attachments {
+		gl.DeleteTextures(1, &attachment.handle)
+	}
 
-    free(framebuffer)
+	free(framebuffer)
 }
 
-framebuffer_clear_attachments :: proc(framebuffer: ^Framebuffer, color: [^]f32, depth: f32, stencil: i32) {
+framebuffer_clear_attachments :: proc(
+	framebuffer: ^Framebuffer,
+	color: [^]f32,
+	depth: f32,
+	stencil: i32,
+) {
 	color_attachments := 0
 
 	for attachment in framebuffer.attachments {
@@ -521,14 +569,16 @@ framebuffer_clear_attachments :: proc(framebuffer: ^Framebuffer, color: [^]f32, 
 }
 
 pipeline_resize :: proc(pipeline: ^Pipeline, width, height: i32) {
-    if (pipeline.render_target != nil) {
-        framebuffer_destroy(pipeline.render_target)
-        pipeline.render_target = create_framebuffer(FramebufferDescription {
-            width = width,
-            height = height,
-            attachments = pipeline.render_target.attachments,
-        })
-    }
+	if (pipeline.render_target != nil) {
+		framebuffer_destroy(pipeline.render_target)
+		pipeline.render_target = create_framebuffer(
+			FramebufferDescription {
+				width = width,
+				height = height,
+				attachments = pipeline.render_target.attachments,
+			},
+		)
+	}
 }
 
 Texture2D :: struct {
@@ -538,17 +588,34 @@ Texture2D :: struct {
 	format: PixelFormat,
 }
 
-create_texture_2d :: proc(width, height: i32, format: PixelFormat,  data: [^]u8) -> (texture: ^Texture2D) {
+create_texture_2d :: proc(
+	width, height: i32,
+	format: PixelFormat,
+	storage_format: PixelFormat,
+	data: [^]u8,
+) -> (
+	texture: ^Texture2D,
+) {
 	texture = new(Texture2D)
 	texture.width = width
 	texture.height = height
 	texture.format = format
 
 	gl.CreateTextures(gl.TEXTURE_2D, 1, &texture.handle)
-	gl.TextureStorage2D(texture.handle, 1, u32(format), width, height)
-	
+	gl.TextureStorage2D(texture.handle, 1, u32(storage_format), width, height)
+
 	if data != nil {
-		gl.TextureSubImage2D(texture.handle, 0, 0, 0, width, height, u32(format), gl.UNSIGNED_BYTE, data)
+		gl.TextureSubImage2D(
+			texture.handle,
+			0,
+			0,
+			0,
+			width,
+			height,
+			u32(format),
+			gl.UNSIGNED_BYTE,
+			data,
+		)
 	}
 	return
 }
