@@ -2,6 +2,7 @@ package tinigen
 
 import glm "core:math/linalg/glsl"
 
+import "core:c"
 import "core:fmt"
 import "core:mem"
 import "core:os"
@@ -10,7 +11,6 @@ import "core:strconv"
 import "core:strings"
 import "vendor:cgltf"
 import "vendor:stb/image"
-import "core:c"
 
 Vertex :: struct {
 	position: glm.vec3,
@@ -21,14 +21,14 @@ Vertex :: struct {
 Mesh :: struct {
 	vertices: [dynamic]Vertex,
 	indices:  [dynamic]u32,
-	meterial: Material
+	meterial: Material,
 }
 
 load_model :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 
 	if strings.ends_with(filepath, ".obj") {
 		return load_obj(filepath)
-	} else if strings.ends_with(filepath, ".gltf") {
+	} else if strings.ends_with(filepath, ".gltf") || strings.ends_with(filepath, ".glb") {
 		return load_gltf(filepath)
 	}
 
@@ -194,8 +194,9 @@ load_obj :: proc(filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 }
 
 Material :: struct {
-	diffuse_texture : ^Texture2D,
-	normal_texture : ^Texture2D,
+	diffuse_texture:            ^Texture2D,
+	normal_texture:             ^Texture2D,
+	metallic_roughness_texture: ^Texture2D,
 }
 
 load_gltf :: proc(gltf_filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
@@ -218,7 +219,7 @@ load_gltf :: proc(gltf_filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 
 	relative_path := filepath.dir(gltf_filepath)
 
-	for mesh_index in 0..<len(out.meshes) {
+	for mesh_index in 0 ..< len(out.meshes) {
 		count := 0
 		positions: [^]glm.vec3 = nil
 		uvs: [^]glm.vec2 = nil
@@ -227,7 +228,7 @@ load_gltf :: proc(gltf_filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 		mesh := out.meshes[mesh_index]
 		m := Mesh{}
 
-		for primitive_index in 0..<len(mesh.primitives) {
+		for primitive_index in 0 ..< len(mesh.primitives) {
 			primitive := mesh.primitives[primitive_index]
 
 			m.meterial = load_material(primitive.material, relative_path) or_return
@@ -238,12 +239,12 @@ load_gltf :: proc(gltf_filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 					reserve(&m.indices, accessor.count)
 
 					if accessor.component_type == .r_16u {
-						model_indices := transmute([^]u16) get_accessor_data(accessor)
+						model_indices := transmute([^]u16)get_accessor_data(accessor)
 						for x in 0 ..< accessor.count {
 							append(&m.indices, u32(model_indices[x]))
 						}
 					} else if accessor.component_type == .r_32u {
-						model_indices := transmute([^]u32) get_accessor_data(accessor)
+						model_indices := transmute([^]u32)get_accessor_data(accessor)
 						for x in 0 ..< accessor.count {
 							append(&m.indices, model_indices[x])
 						}
@@ -256,11 +257,11 @@ load_gltf :: proc(gltf_filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 				for attribute in primitive.attributes {
 					accessor := attribute.data
 					if attribute.type == .normal && accessor.type == .vec3 {
-						normals = transmute([^]glm.vec3) get_accessor_data(accessor)
+						normals = transmute([^]glm.vec3)get_accessor_data(accessor)
 					} else if attribute.type == .texcoord && accessor.type == .vec2 {
-						uvs = transmute([^]glm.vec2) get_accessor_data(accessor)
+						uvs = transmute([^]glm.vec2)get_accessor_data(accessor)
 					} else if attribute.type == .position && accessor.type == .vec3 {
-						positions = transmute([^]glm.vec3) get_accessor_data(accessor)
+						positions = transmute([^]glm.vec3)get_accessor_data(accessor)
 						count = int(accessor.count)
 					}
 				}
@@ -319,19 +320,20 @@ load_gltf :: proc(gltf_filepath: string) -> (meshes: [dynamic]Mesh, ok: bool) {
 	return
 }
 
-load_pixel_from_file :: proc(filepath: string, desired_channels : i32) -> (data: [^]byte, w, h, channels: i32, ok: bool) {
-	file_data, err := os.read_entire_file(filepath)
-	if file_data == nil {
-		ok = false
-		return
-	}
+load_pixel_from_memory :: proc(
+	data: [^]byte,
+	size: i32,
+	desired_channels: i32,
+) -> (
+	pixels: [^]byte,
+	w, h, channels: i32,
+	ok: bool,
+) {
 
-	defer delete(file_data)
-
-	width : c.int = 0
-	height : c.int = 0
+	width: c.int = 0
+	height: c.int = 0
 	_desired_channels: c.int = desired_channels
-	pixels := image.load_from_memory(raw_data(file_data), i32(len(file_data)), &width, &height, nil, _desired_channels)
+	pixels = image.load_from_memory(data, size, &width, &height, nil, _desired_channels)
 
 	if pixels == nil {
 		ok = false
@@ -341,35 +343,147 @@ load_pixel_from_file :: proc(filepath: string, desired_channels : i32) -> (data:
 	w = width
 	h = height
 	channels = desired_channels
-	data = pixels
 	ok = true
 	return
 }
 
-load_material :: proc (gltf_material : ^cgltf.material, relative_path: string) -> (material: Material, ok:bool) {
+
+load_pixel_from_file :: proc(
+	filepath: string,
+	desired_channels: i32,
+) -> (
+	pixels: [^]byte,
+	w, h, channels: i32,
+	ok: bool,
+) {
+	file_data, err := os.read_entire_file(filepath)
+	if file_data == nil {
+		ok = false
+		return
+	}
+
+	defer delete(file_data)
+
+	width: c.int = 0
+	height: c.int = 0
+	_desired_channels: c.int = desired_channels
+	pixels = image.load_from_memory(
+		raw_data(file_data),
+		i32(len(file_data)),
+		&width,
+		&height,
+		nil,
+		_desired_channels,
+	)
+
+	if pixels == nil {
+		ok = false
+		return
+	}
+
+	w = width
+	h = height
+	channels = desired_channels
+	ok = true
+	return
+}
+
+
+load_texture :: proc(
+	gltf_texture: ^cgltf.texture,
+	relative_path: string,
+) -> (
+	texture: ^Texture2D,
+	ok: bool,
+) {
+	if gltf_texture.image_ != nil {
+		pixels: [^]byte = nil
+		width: i32 = 0
+		height: i32 = 0
+		channels: i32 = 0
+		if gltf_texture.image_.uri != nil {
+			path := filepath.join({relative_path, string(gltf_texture.image_.uri)})
+			pixels, width, height, channels = load_pixel_from_file(path, 4) or_return
+		} else if gltf_texture.image_.buffer_view != nil {
+			buffer := gltf_texture.image_.buffer_view.buffer
+			offset := gltf_texture.image_.buffer_view.offset
+
+			if buffer != nil {
+				data := u64(uintptr(buffer.data)) + u64(offset)
+				data_ptr := transmute([^]byte)(data)
+				pixels, width, height, channels = load_pixel_from_memory(
+					data_ptr,
+					i32(gltf_texture.image_.buffer_view.size),
+					4,
+				) or_return
+			}
+		}
+
+		if pixels != nil {
+			texture = create_texture_2d(width, height, .RGBA, .RGBA8, pixels)
+		} else {
+			ok = false
+			return
+		}
+
+	}
+
+	ok = true
+	return
+}
+
+load_material :: proc(
+	gltf_material: ^cgltf.material,
+	relative_path: string,
+) -> (
+	material: Material,
+	ok: bool,
+) {
 
 	{
-		path,_ := filepath.join({relative_path, string(gltf_material.normal_texture.texture.image_.uri)})
-		pixels, w, h, c := load_pixel_from_file(path, 4) or_return	
-		fmt.printfln("Loaded Normal Map %s %d x %d", path, w, h)
-
-		material.normal_texture = create_texture_2d(w, h, .RGBA, .RGBA8, pixels)
+		normal_texture := gltf_material.normal_texture.texture
+		if normal_texture != nil {
+			material.normal_texture = load_texture(normal_texture, relative_path) or_return
+			fmt.printfln(
+				"Loaded Normal Map %d x %d",
+				material.normal_texture.width,
+				material.normal_texture.height,
+			)
+		}
 	}
 
 	if (gltf_material.has_pbr_metallic_roughness) {
-		path,_ := filepath.join({relative_path, string(gltf_material.pbr_metallic_roughness.base_color_texture.texture.image_.uri)})
-		pixels, w, h, c := load_pixel_from_file(path, 4) or_return
-		fmt.printfln("Loaded Base Color Map %s %d x %d", path, w, h)
-		
-		material.diffuse_texture = create_texture_2d(w, h, .RGBA, .RGBA8, pixels)
-	}
+		pbr := gltf_material.pbr_metallic_roughness
 
-	if (gltf_material.has_pbr_specular_glossiness) {
-		path,_ := filepath.join({relative_path, string(gltf_material.pbr_specular_glossiness.diffuse_texture.texture.image_.uri)})
-		pixels, w, h, c := load_pixel_from_file(path, 4) or_return
-		fmt.printfln("Loaded Diffuse Map %s %d x %d", path, w, h)
+		{
+			base_color_texture := pbr.base_color_texture.texture
+			if base_color_texture != nil {
+				material.diffuse_texture = load_texture(
+					base_color_texture,
+					relative_path,
+				) or_return
+				fmt.printfln(
+					"Loaded Base Color Map %d x %d",
+					material.diffuse_texture.width,
+					material.diffuse_texture.height,
+				)
+			}
+		}
 
-		material.diffuse_texture = create_texture_2d(w, h, .RGBA, .RGBA8, pixels)
+		{
+			metallic_roughness_texture := pbr.metallic_roughness_texture.texture
+			if metallic_roughness_texture != nil {
+				material.metallic_roughness_texture = load_texture(
+					metallic_roughness_texture,
+					relative_path,
+				) or_return
+				fmt.printfln(
+					"Loaded Metallic Roughness Map %d x %d",
+					material.metallic_roughness_texture.width,
+					material.metallic_roughness_texture.height,
+				)
+			}
+		}
 	}
 
 	ok = true
@@ -380,7 +494,7 @@ get_accessor_data :: proc(accessor: ^cgltf.accessor) -> rawptr {
 	buffer := accessor.buffer_view.buffer
 	offset := accessor.offset + accessor.buffer_view.offset
 	data := u64(uintptr(buffer.data)) + u64(offset)
-	return rawptr(uintptr(data))	
+	return rawptr(uintptr(data))
 }
 
 GpuMesh :: struct {

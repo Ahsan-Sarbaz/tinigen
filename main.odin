@@ -64,7 +64,7 @@ main_with_ok :: proc() -> (ok: bool) {
 	gl.DebugMessageControl(gl.DONT_CARE, gl.DONT_CARE, gl.DONT_CARE, 0, nil, gl.FALSE)
 	gl.DebugMessageControl(gl.DEBUG_SOURCE_API, gl.DEBUG_TYPE_ERROR, gl.DONT_CARE, 0, nil, gl.TRUE)
 
-	model_filepath := "models/WaterBottle.gltf"
+	model_filepath := "models/WaterBottle.glb"
 
 	start := time.now()
 	meshes, loaded := load_model(model_filepath)
@@ -215,8 +215,16 @@ main_with_ok :: proc() -> (ok: bool) {
 			pipeline_set_vertex_buffer(&pipeline, 0, mesh.vbo)
 			pipeline_set_element_buffer(&pipeline, mesh.ebo)
 
-			pipeline_bind_texture2d(&pipeline, "uDiffuseTexture", 0, meshes[index].meterial.diffuse_texture)
-			pipeline_bind_texture2d(&pipeline, "uNormalTexture", 1, meshes[index].meterial.normal_texture)
+			if meshes[index].meterial.diffuse_texture != nil {
+				pipeline_bind_texture2d(&pipeline, "uDiffuseTexture", 0, meshes[index].meterial.diffuse_texture)
+			}
+			if meshes[index].meterial.normal_texture != nil {
+				pipeline_bind_texture2d(&pipeline, "uNormalTexture", 1, meshes[index].meterial.normal_texture)
+			}
+
+			if meshes[index].meterial.metallic_roughness_texture != nil {
+				pipeline_bind_texture2d(&pipeline, "uMetallicRoughnessTexture", 2, meshes[index].meterial.metallic_roughness_texture)
+			}
 
 			gl.DrawElements(gl.TRIANGLES, i32(mesh.ebo.count), gl.UNSIGNED_INT, nil)				
 		}
