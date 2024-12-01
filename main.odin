@@ -186,6 +186,13 @@ main_with_ok :: proc() -> (ok: bool) {
 
 	running = true
 
+	UniformBlock :: struct {
+		view_proj: glm.mat4,
+		camera_pos: glm.vec3,
+	}
+
+	uniform_buffer := create_buffer(1, size_of(UniformBlock), nil, .Dynamic)
+
 	for (!glfw.WindowShouldClose(window) && running) {
 		frame_start_time = glfw.GetTime()
 
@@ -246,15 +253,18 @@ main_with_ok :: proc() -> (ok: bool) {
 		clear_color := [4]f32{0.2, 0.3, 0.3, 1.0}
 		pipeline_clear_render_target(&pipeline, &clear_color[0])
 
-		pipeline_set_uniform_mat4(&pipeline, "uProjection", &projection[0][0])
-		pipeline_set_uniform_mat4(&pipeline, "uView", &view[0][0])
-		pipeline_set_uniform_vec3(&pipeline, "uCameraPos", &camera[0])
+		uniform_block := UniformBlock {
+			view_proj = projection * view,
+			camera_pos = camera,
+		}
+
+		pipeline_bind_uniform_block(&pipeline, "UniformBlock", 0, uniform_buffer, &uniform_block)
 
 		for mesh, index in gpu_meshes {
 
 			transform_matrix := glm.mat4Scale(scene.meshes[index].transform.scale)
-			// transform_matrix *= glm.mat4FromQuat(scene.meshes[index].transform.rotation)
-			// transform_matrix *= glm.mat4Translate(scene.meshes[index].transform.position)
+			transform_matrix *= glm.mat4FromQuat(scene.meshes[index].transform.rotation)
+			transform_matrix *= glm.mat4Translate(scene.meshes[index].transform.position)
 
 			pipeline_set_uniform_mat4(&pipeline, "uModel", &transform_matrix[0][0])
 
@@ -262,14 +272,29 @@ main_with_ok :: proc() -> (ok: bool) {
 			pipeline_set_element_buffer(&pipeline, mesh.ebo)
 
 			if scene.meshes[index].meterial.diffuse_texture != nil {
-				pipeline_bind_texture2d(&pipeline, "uAlbedoTexture", 0, scene.meshes[index].meterial.diffuse_texture)
+				pipeline_bind_texture2d(
+					&pipeline,
+					"uAlbedoTexture",
+					0,
+					scene.meshes[index].meterial.diffuse_texture,
+				)
 			}
 			if scene.meshes[index].meterial.normal_texture != nil {
-				pipeline_bind_texture2d(&pipeline, "uNormalTexture", 1, scene.meshes[index].meterial.normal_texture)
+				pipeline_bind_texture2d(
+					&pipeline,
+					"uNormalTexture",
+					1,
+					scene.meshes[index].meterial.normal_texture,
+				)
 			}
 
 			if scene.meshes[index].meterial.metallic_roughness_texture != nil {
-				pipeline_bind_texture2d(&pipeline, "uMetallicRoughnessTexture", 2, scene.meshes[index].meterial.metallic_roughness_texture)
+				pipeline_bind_texture2d(
+					&pipeline,
+					"uMetallicRoughnessTexture",
+					2,
+					scene.meshes[index].meterial.metallic_roughness_texture,
+				)
 			}
 
 			gl.DrawElements(gl.TRIANGLES, i32(mesh.ebo.count), gl.UNSIGNED_INT, nil)

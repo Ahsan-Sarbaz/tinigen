@@ -2,6 +2,11 @@
 
 out vec4 FragColor;
 
+layout (std140) uniform UniformBlock {
+    mat4 uVP;
+    vec3 uCameraPos;
+};
+
 in mat3 TBN;
 in vec2 TexCoords;
 in vec3 FragPos;
@@ -9,7 +14,6 @@ in vec3 FragPos;
 uniform sampler2D uAlbedoTexture;         // Albedo (diffuse) map
 uniform sampler2D uNormalTexture;         // Normal map
 uniform sampler2D uMetallicRoughnessTexture; // Metallic in R, Roughness in G
-uniform vec3 uCameraPos;                 // Camera (view) position in world space
 
 const float PI = 3.14159265359;
 

@@ -267,6 +267,17 @@ pipeline_set_element_buffer :: proc(pipeline: ^Pipeline, buffer: GpuBuffer) {
 	gl.VertexArrayElementBuffer(pipeline.vertex_input.vao, buffer.handle)
 }
 
+pipeline_bind_uniform_block :: proc(pipeline: ^Pipeline, name: string, binding: u32, buffer : GpuBuffer,  data : rawptr) {
+	location := gl.GetUniformBlockIndex(pipeline.program, strings.unsafe_string_to_cstring(name))
+	if (location == gl.INVALID_INDEX) {
+		fmt.println("Could not find uniform block", name)
+		return
+	}
+	gl.UniformBlockBinding(pipeline.program, location, binding)
+	gl.NamedBufferSubData(buffer.handle, 0, int(buffer.size), data)
+	gl.BindBufferBase(gl.UNIFORM_BUFFER, binding, buffer.handle)
+}
+
 pipeline_clear_render_target :: proc(
 	pipeline: ^Pipeline,
 	color: [^]f32,
