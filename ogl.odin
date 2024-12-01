@@ -383,6 +383,21 @@ pipeline_set_uniform_vec4 :: proc(pipeline: ^Pipeline, name: string, value: [^]f
 	gl.ProgramUniform4fv(pipeline.program, loc, 1, value)
 }
 
+pipeline_set_uniform_vec3 :: proc(pipeline: ^Pipeline, name: string, value: [^]f32) {
+	loc, ok := pipeline.uniform_locations[name]
+	if (!ok) {
+		loc = gl.GetUniformLocation(pipeline.program, strings.unsafe_string_to_cstring(name))
+		if (loc == -1) {
+			fmt.println("Could not find uniform variable", name)
+			return
+		}
+
+		pipeline.uniform_locations[name] = loc
+	}
+
+	gl.ProgramUniform3fv(pipeline.program, loc, 1, value)
+}
+
 pipeline_set_uniform_int :: proc(pipeline: ^Pipeline, name: string, value: i32) {
 	loc, ok := pipeline.uniform_locations[name]
 	if (!ok) {

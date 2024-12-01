@@ -67,7 +67,7 @@ main_with_ok :: proc() -> (ok: bool) {
 	model_filepath := "models/WaterBottle.glb"
 
 	start := time.now()
-	meshes, loaded := load_model(model_filepath)
+	scene, loaded := load_gltf(model_filepath)
 
 	if !loaded {
 		fmt.printfln("Failed to load %s", model_filepath)
@@ -75,7 +75,7 @@ main_with_ok :: proc() -> (ok: bool) {
 	}
 
 	fmt.printfln("Loaded %s in %f seconds", model_filepath, time.since(start))
-	for mesh in meshes {
+	for mesh in scene.meshes {
 		fmt.printfln("Loaded %d vertices %d indices", len(mesh.vertices), len(mesh.indices))
 	}
 
@@ -84,7 +84,7 @@ main_with_ok :: proc() -> (ok: bool) {
 
 	program := gl.load_shaders_file(vs_filepath, fs_filepath) or_return
 
-	gpu_meshes := upload_mesh_to_gpu(meshes[:]) or_return
+	gpu_meshes := upload_mesh_to_gpu(scene.meshes[:]) or_return
 
 	pipeline := create_pipeline(
 		PipelineDescription {
@@ -130,6 +130,12 @@ main_with_ok :: proc() -> (ok: bool) {
 							},
 							VertexInputAttribute {
 								location = 2,
+								format = .Float4,
+								normalized = gl.FALSE,
+								offset = u32(offset_of(Vertex, tangent)),
+							},
+							VertexInputAttribute {
+								location = 3,
 								format = .Float2,
 								normalized = gl.FALSE,
 								offset = u32(offset_of(Vertex, texcoord)),
@@ -145,28 +151,38 @@ main_with_ok :: proc() -> (ok: bool) {
 		glm.radians_f32(70.0),
 		f32(WINDOW_WIDTH) / f32(WINDOW_HEIGHT),
 		0.1,
-		1000.0,
+		10000.0,
 	)
-	model := glm.identity(glm.mat4)
 	view := glm.identity(glm.mat4)
-
-	angle: f32 = 0.0
 
 	frame_start_time := glfw.GetTime()
 	frame_end_time := glfw.GetTime()
-	frame_elapsed_time : f32 = 0.0
+	frame_elapsed_time: f32 = 0.0
 	frame_count := 0
 
 	current_window_width, current_window_height := glfw.GetWindowSize(window)
 
-	cam_x : f32= 0.0
-	cam_y : f32= 0.0
+	cam_x: f32 = 0.0
+	cam_y: f32 = 0.0
+	cam_z: f32 = 0.0
 
-	fullscreen_blit_program := gl.load_shaders_file("./shaders/fullscreen_blit.vert.glsl", "./shaders/fullscreen_blit.frag.glsl") or_return
+	cam_angle_x: f32 = 0.0
+	cam_angle_y: f32 = 0.0
+
+	fullscreen_blit_program := gl.load_shaders_file(
+		"./shaders/fullscreen_blit.vert.glsl",
+		"./shaders/fullscreen_blit.frag.glsl",
+	) or_return
 
 	sobel_effect_program := gl.load_compute_file("./shaders/effects/sobel.comp.glsl") or_return
-	
-	sobel_effect_out_texture := create_texture_2d(WINDOW_WIDTH, WINDOW_HEIGHT, .RGBA, .RGBA32F,  nil)
+
+	sobel_effect_out_texture := create_texture_2d(
+		WINDOW_WIDTH,
+		WINDOW_HEIGHT,
+		.RGBA,
+		.RGBA32F,
+		nil,
+	)
 
 	running = true
 
@@ -185,20 +201,43 @@ main_with_ok :: proc() -> (ok: bool) {
 		glfw.PollEvents()
 
 		// view = glm.mat4Translate({0, 0, -(zoom_factor * frame_elapsed_time)})
-		view = glm.mat4LookAt({cam_x, cam_y, zoom_factor * 0.3}, {cam_x, cam_y, 0}, {0, 1, 0})
-		model = glm.mat4Rotate({0, 1, 0}, glm.radians_f32(angle))
+		camera := glm.vec3{cam_x, cam_y, zoom_factor + cam_z}
+		view = glm.mat4LookAt(camera, {cam_x, cam_y, cam_z - 1}, {0, 1, 0})
+		view *= glm.mat4Rotate(glm.vec3{1, 0, 0}, glm.radians_f32(cam_angle_x))
+		view *= glm.mat4Rotate(glm.vec3{0, 1, 0}, glm.radians_f32(cam_angle_y))
 
 		if glfw.GetKey(window, glfw.KEY_W) == glfw.PRESS {
-			cam_y += 0.1 * frame_elapsed_time
-		} else if glfw.GetKey(window, glfw.KEY_S) == glfw.PRESS {
-			cam_y -= 0.1 * frame_elapsed_time
-		} else if glfw.GetKey(window, glfw.KEY_A) == glfw.PRESS {
-			cam_x -= 0.1 * frame_elapsed_time
-		} else if glfw.GetKey(window, glfw.KEY_D) == glfw.PRESS {
-			cam_x += 0.1 * frame_elapsed_time
+			cam_z -= 1 * frame_elapsed_time
+		}
+		if glfw.GetKey(window, glfw.KEY_S) == glfw.PRESS {
+			cam_z += 1 * frame_elapsed_time
+		}
+		if glfw.GetKey(window, glfw.KEY_A) == glfw.PRESS {
+			cam_x -= 1 * frame_elapsed_time
+		}
+		if glfw.GetKey(window, glfw.KEY_D) == glfw.PRESS {
+			cam_x += 1 * frame_elapsed_time
+		}
+		if glfw.GetKey(window, glfw.KEY_Q) == glfw.PRESS {
+			cam_y -= 1 * frame_elapsed_time
+		}
+		if glfw.GetKey(window, glfw.KEY_E) == glfw.PRESS {
+			cam_y += 1 * frame_elapsed_time
 		}
 
-		angle += 1
+		if glfw.GetKey(window, glfw.KEY_LEFT) == glfw.PRESS {
+			cam_angle_y += 90 * frame_elapsed_time
+		}
+		if glfw.GetKey(window, glfw.KEY_RIGHT) == glfw.PRESS {
+			cam_angle_y -= 90 * frame_elapsed_time
+		}
+		if glfw.GetKey(window, glfw.KEY_UP) == glfw.PRESS {
+			cam_angle_x += 90 * frame_elapsed_time
+		}
+		if glfw.GetKey(window, glfw.KEY_DOWN) == glfw.PRESS {
+			cam_angle_x -= 90 * frame_elapsed_time
+		}
+
 
 		gl.ClearColor(0, 0, 0, 1.0)
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
@@ -206,27 +245,34 @@ main_with_ok :: proc() -> (ok: bool) {
 		pipeline_begin(&pipeline)
 		clear_color := [4]f32{0.2, 0.3, 0.3, 1.0}
 		pipeline_clear_render_target(&pipeline, &clear_color[0])
-		
+
 		pipeline_set_uniform_mat4(&pipeline, "uProjection", &projection[0][0])
-		pipeline_set_uniform_mat4(&pipeline, "uModel", &model[0][0])
 		pipeline_set_uniform_mat4(&pipeline, "uView", &view[0][0])
+		pipeline_set_uniform_vec3(&pipeline, "uCameraPos", &camera[0])
 
 		for mesh, index in gpu_meshes {
+
+			transform_matrix := glm.mat4Scale(scene.meshes[index].transform.scale)
+			// transform_matrix *= glm.mat4FromQuat(scene.meshes[index].transform.rotation)
+			// transform_matrix *= glm.mat4Translate(scene.meshes[index].transform.position)
+
+			pipeline_set_uniform_mat4(&pipeline, "uModel", &transform_matrix[0][0])
+
 			pipeline_set_vertex_buffer(&pipeline, 0, mesh.vbo)
 			pipeline_set_element_buffer(&pipeline, mesh.ebo)
 
-			if meshes[index].meterial.diffuse_texture != nil {
-				pipeline_bind_texture2d(&pipeline, "uDiffuseTexture", 0, meshes[index].meterial.diffuse_texture)
+			if scene.meshes[index].meterial.diffuse_texture != nil {
+				pipeline_bind_texture2d(&pipeline, "uAlbedoTexture", 0, scene.meshes[index].meterial.diffuse_texture)
 			}
-			if meshes[index].meterial.normal_texture != nil {
-				pipeline_bind_texture2d(&pipeline, "uNormalTexture", 1, meshes[index].meterial.normal_texture)
-			}
-
-			if meshes[index].meterial.metallic_roughness_texture != nil {
-				pipeline_bind_texture2d(&pipeline, "uMetallicRoughnessTexture", 2, meshes[index].meterial.metallic_roughness_texture)
+			if scene.meshes[index].meterial.normal_texture != nil {
+				pipeline_bind_texture2d(&pipeline, "uNormalTexture", 1, scene.meshes[index].meterial.normal_texture)
 			}
 
-			gl.DrawElements(gl.TRIANGLES, i32(mesh.ebo.count), gl.UNSIGNED_INT, nil)				
+			if scene.meshes[index].meterial.metallic_roughness_texture != nil {
+				pipeline_bind_texture2d(&pipeline, "uMetallicRoughnessTexture", 2, scene.meshes[index].meterial.metallic_roughness_texture)
+			}
+
+			gl.DrawElements(gl.TRIANGLES, i32(mesh.ebo.count), gl.UNSIGNED_INT, nil)
 		}
 
 		pipeline_end(&pipeline)
