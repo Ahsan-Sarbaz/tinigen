@@ -48,7 +48,7 @@ buffer_sub_data :: proc(buffer: GpuBuffer, offset: u32, data: rawptr) {
 	gl.NamedBufferSubData(buffer.handle, int(offset), int(buffer.size), data)
 }
 
-CompareFunc :: enum u32 {
+CompareFunc :: enum i32 {
 	Never        = gl.NEVER,
 	Less         = gl.LESS,
 	Equal        = gl.EQUAL,
@@ -99,15 +99,20 @@ PipelineState :: struct {
 	blend_dst:          BlendFactor,
 	front_polygon_mode: PolygonMode,
 	back_polygon_mode:  PolygonMode,
+	depth_func:         CompareFunc,
+}
+
+PipelineStage :: struct {
+	program:      u32,
+	vertex_input: ^VertexInput,
+	state:        PipelineState,
+	old_state:    PipelineState,
+	uniform_locations: map[string]i32,
 }
 
 Pipeline :: struct {
 	render_target:     ^Framebuffer,
-	program:           u32,
-	vertex_input:      VertexInput,
-	uniform_locations: map[string]i32,
-	state:             PipelineState,
-	old_state:         PipelineState,
+	stages:            []PipelineStage,
 }
 
 VertexFormat :: enum {
@@ -199,7 +204,8 @@ create_vertex_input_layout :: proc(bindings: []VertexInputBinding) -> (layout: V
 	return
 }
 
-create_vertex_input :: proc(layout: VertexInputLayout) -> (input: VertexInput) {
+create_vertex_input :: proc(layout: VertexInputLayout) -> (input: ^VertexInput) {
+	input = new(VertexInput)
 	input.layout = layout
 
 	gl.CreateVertexArrays(1, &input.vao)
@@ -223,57 +229,73 @@ create_vertex_input :: proc(layout: VertexInputLayout) -> (input: VertexInput) {
 	return
 }
 
+PipelineStageDescription :: struct {
+	program: u32,
+	layout:  VertexInputLayout,
+	state:   PipelineState,
+}
+
 PipelineDescription :: struct {
 	render_target: ^Framebuffer,
-	layout:        VertexInputLayout,
-	state:         PipelineState,
-	program:       u32,
+	stages:        []PipelineStageDescription,
 }
 
 create_pipeline :: proc(desc: PipelineDescription) -> (pipeline: Pipeline) {
 	pipeline.render_target = desc.render_target
-	pipeline.program = desc.program
-	pipeline.state = desc.state
-	pipeline.vertex_input = create_vertex_input(desc.layout)
+
+	pipeline.stages = make([]PipelineStage, len(desc.stages))
+	for stage_desc, i in desc.stages {
+		pipeline.stages[i].state = stage_desc.state
+		pipeline.stages[i].program = stage_desc.program
+		if len(stage_desc.layout.bindings) > 0 {
+			pipeline.stages[i].vertex_input = create_vertex_input(stage_desc.layout)
+		}
+	}
 	return
 }
 
-pipeline_set_vertex_buffer :: proc(pipeline: ^Pipeline, binding: u32, buffer: GpuBuffer) {
-	if (pipeline.vertex_input.vao == 0) {
+pipeline_stage_set_vertex_buffer :: proc(stage: ^PipelineStage, binding: u32, buffer: GpuBuffer) {
+	if (stage.vertex_input.vao == 0) {
 		fmt.println("Invalid vertex input")
 		return
 	}
 
-	if (int(binding) >= len(pipeline.vertex_input.layout.bindings)) {
+	if (int(binding) >= len(stage.vertex_input.layout.bindings)) {
 		fmt.println("Invalid binding index")
 		return
 	}
 
 	gl.VertexArrayVertexBuffer(
-		pipeline.vertex_input.vao,
+		stage.vertex_input.vao,
 		binding,
 		buffer.handle,
 		0,
-		pipeline.vertex_input.layout.bindings[binding].stride,
+		stage.vertex_input.layout.bindings[binding].stride,
 	)
 }
 
-pipeline_set_element_buffer :: proc(pipeline: ^Pipeline, buffer: GpuBuffer) {
-	if (pipeline.vertex_input.vao == 0) {
+pipeline_stage_set_element_buffer :: proc(stage: ^PipelineStage, buffer: GpuBuffer) {
+	if (stage.vertex_input.vao == 0) {
 		fmt.println("Invalid vertex input")
 		return
 	}
 
-	gl.VertexArrayElementBuffer(pipeline.vertex_input.vao, buffer.handle)
+	gl.VertexArrayElementBuffer(stage.vertex_input.vao, buffer.handle)
 }
 
-pipeline_bind_uniform_block :: proc(pipeline: ^Pipeline, name: string, binding: u32, buffer : GpuBuffer,  data : rawptr) {
-	location := gl.GetUniformBlockIndex(pipeline.program, strings.unsafe_string_to_cstring(name))
+pipeline_stage_bind_uniform_block :: proc(
+	stage: ^PipelineStage,
+	name: string,
+	binding: u32,
+	buffer: GpuBuffer,
+	data: rawptr,
+) {
+	location := gl.GetUniformBlockIndex(stage.program, strings.unsafe_string_to_cstring(name))
 	if (location == gl.INVALID_INDEX) {
 		fmt.println("Could not find uniform block", name)
 		return
 	}
-	gl.UniformBlockBinding(pipeline.program, location, binding)
+	gl.UniformBlockBinding(stage.program, location, binding)
 	gl.NamedBufferSubData(buffer.handle, 0, int(buffer.size), data)
 	gl.BindBufferBase(gl.UNIFORM_BUFFER, binding, buffer.handle)
 }
@@ -289,28 +311,30 @@ pipeline_clear_render_target :: proc(
 	}
 }
 
-pipeline_begin :: proc(pipeline: ^Pipeline) {
-	gl.UseProgram(pipeline.program)
-	gl.BindVertexArray(pipeline.vertex_input.vao)
+pipeline_stage_begin :: proc(stage: ^PipelineStage) {
+	gl.UseProgram(stage.program)
+	if stage.vertex_input != nil {
+		gl.BindVertexArray(stage.vertex_input.vao)
+	}
 
-	pipeline.old_state.blend = gl.IsEnabled(gl.BLEND)
+	stage.old_state.blend = gl.IsEnabled(gl.BLEND)
 
-	if (pipeline.state.blend) {
+	if (stage.state.blend) {
 		gl.Enable(gl.BLEND)
-		gl.BlendFunc(u32(pipeline.state.blend_src), u32(pipeline.state.blend_dst))
+		gl.BlendFunc(u32(stage.state.blend_src), u32(stage.state.blend_dst))
 	} else {
 		gl.Disable(gl.BLEND)
 	}
 
-	pipeline.old_state.depth_test = gl.IsEnabled(gl.DEPTH_TEST)
+	stage.old_state.depth_test = gl.IsEnabled(gl.DEPTH_TEST)
 
-	if (pipeline.state.depth_test) {
+	if (stage.state.depth_test) {
 		gl.Enable(gl.DEPTH_TEST)
 	} else {
 		gl.Disable(gl.DEPTH_TEST)
 	}
 
-	switch (pipeline.state.cull_mode) {
+	switch (stage.state.cull_mode) {
 	case .Front:
 		gl.CullFace(gl.FRONT)
 	case .Back:
@@ -319,115 +343,126 @@ pipeline_begin :: proc(pipeline: ^Pipeline) {
 		gl.CullFace(gl.FRONT_AND_BACK)
 	}
 
-	pipeline.old_state.cull_face = gl.IsEnabled(gl.CULL_FACE)
-	if (pipeline.state.cull_face) {
+	stage.old_state.cull_face = gl.IsEnabled(gl.CULL_FACE)
+	if (stage.state.cull_face) {
 		gl.Enable(gl.CULL_FACE)
 	} else {
 		gl.Disable(gl.CULL_FACE)
 	}
 
+	gl.GetIntegerv(gl.DEPTH_FUNC, transmute(^i32)&stage.old_state.depth_func)
+	gl.DepthFunc(u32(stage.state.depth_func))
 
-	gl.PolygonMode(gl.FRONT, u32(pipeline.state.front_polygon_mode))
-	gl.PolygonMode(gl.BACK, u32(pipeline.state.back_polygon_mode))
+	gl.PolygonMode(gl.FRONT, u32(stage.state.front_polygon_mode))
+	gl.PolygonMode(gl.BACK, u32(stage.state.back_polygon_mode))
 
+}
+
+pipeline_begin :: proc(pipeline: ^Pipeline) {
 	if (pipeline.render_target != nil) {
 		gl.BindFramebuffer(gl.FRAMEBUFFER, pipeline.render_target.handle)
 		gl.Viewport(0, 0, pipeline.render_target.width, pipeline.render_target.height)
-	}
+	}	
 }
 
 pipeline_end :: proc(pipeline: ^Pipeline) {
 	if (pipeline.render_target != nil) {
 		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-	}
+	}	
+}
 
-	if (pipeline.old_state.blend) {
+pipeline_stage_end :: proc(stage: ^PipelineStage) {
+	gl.DepthFunc(u32(stage.old_state.depth_func))
+
+	if (stage.old_state.blend) {
 		gl.Enable(gl.BLEND)
 	} else {
 		gl.Disable(gl.BLEND)
 	}
 
-	if (pipeline.old_state.depth_test) {
+	if (stage.old_state.depth_test) {
 		gl.Enable(gl.DEPTH_TEST)
 	} else {
 		gl.Disable(gl.DEPTH_TEST)
 	}
 
-	if (pipeline.old_state.cull_face) {
+	if (stage.old_state.cull_face) {
 		gl.Enable(gl.CULL_FACE)
 	} else {
 		gl.Disable(gl.CULL_FACE)
 	}
 
 	gl.UseProgram(0)
-	gl.BindVertexArray(0)
+	if stage.vertex_input != nil {
+		gl.BindVertexArray(0)
+	}
 }
 
 
-pipeline_set_uniform_mat4 :: proc(pipeline: ^Pipeline, name: string, value: [^]f32) {
-	loc, ok := pipeline.uniform_locations[name]
+pipeline_stage_set_uniform_mat4 :: proc(stage: ^PipelineStage, name: string, value: [^]f32) {
+	loc, ok := stage.uniform_locations[name]
 	if (!ok) {
-		loc = gl.GetUniformLocation(pipeline.program, strings.unsafe_string_to_cstring(name))
+		loc = gl.GetUniformLocation(stage.program, strings.unsafe_string_to_cstring(name))
 		if (loc == -1) {
 			fmt.println("Could not find uniform variable", name)
 			return
 		}
 
-		pipeline.uniform_locations[name] = loc
+		stage.uniform_locations[name] = loc
 	}
 
-	gl.ProgramUniformMatrix4fv(pipeline.program, loc, 1, gl.FALSE, value)
+	gl.ProgramUniformMatrix4fv(stage.program, loc, 1, gl.FALSE, value)
 }
 
-pipeline_set_uniform_vec4 :: proc(pipeline: ^Pipeline, name: string, value: [^]f32) {
-	loc, ok := pipeline.uniform_locations[name]
+pipeline_stage_set_uniform_vec4 :: proc(stage: ^PipelineStage, name: string, value: [^]f32) {
+	loc, ok := stage.uniform_locations[name]
 	if (!ok) {
-		loc = gl.GetUniformLocation(pipeline.program, strings.unsafe_string_to_cstring(name))
+		loc = gl.GetUniformLocation(stage.program, strings.unsafe_string_to_cstring(name))
 		if (loc == -1) {
 			fmt.println("Could not find uniform variable", name)
 			return
 		}
 
-		pipeline.uniform_locations[name] = loc
+		stage.uniform_locations[name] = loc
 	}
 
-	gl.ProgramUniform4fv(pipeline.program, loc, 1, value)
+	gl.ProgramUniform4fv(stage.program, loc, 1, value)
 }
 
-pipeline_set_uniform_vec3 :: proc(pipeline: ^Pipeline, name: string, value: [^]f32) {
-	loc, ok := pipeline.uniform_locations[name]
+pipeline_stage_set_uniform_vec3 :: proc(stage: ^PipelineStage, name: string, value: [^]f32) {
+	loc, ok := stage.uniform_locations[name]
 	if (!ok) {
-		loc = gl.GetUniformLocation(pipeline.program, strings.unsafe_string_to_cstring(name))
+		loc = gl.GetUniformLocation(stage.program, strings.unsafe_string_to_cstring(name))
 		if (loc == -1) {
 			fmt.println("Could not find uniform variable", name)
 			return
 		}
 
-		pipeline.uniform_locations[name] = loc
+		stage.uniform_locations[name] = loc
 	}
 
-	gl.ProgramUniform3fv(pipeline.program, loc, 1, value)
+	gl.ProgramUniform3fv(stage.program, loc, 1, value)
 }
 
-pipeline_set_uniform_int :: proc(pipeline: ^Pipeline, name: string, value: i32) {
-	loc, ok := pipeline.uniform_locations[name]
+pipeline_stage_set_uniform_int :: proc(stage: ^PipelineStage, name: string, value: i32) {
+	loc, ok := stage.uniform_locations[name]
 	if (!ok) {
-		loc = gl.GetUniformLocation(pipeline.program, strings.unsafe_string_to_cstring(name))
+		loc = gl.GetUniformLocation(stage.program, strings.unsafe_string_to_cstring(name))
 		if (loc == -1) {
 			fmt.println("Could not find uniform variable", name)
 			return
 		}
 
-		pipeline.uniform_locations[name] = loc
+		stage.uniform_locations[name] = loc
 	}
 
-	gl.ProgramUniform1i(pipeline.program, loc, value)
+	gl.ProgramUniform1i(stage.program, loc, value)
 }
 
 pipeline_blit_onto_default :: proc(pipeline: ^Pipeline, dstWidth: i32, dstHeight: i32) {
 	gl.BindFramebuffer(gl.READ_FRAMEBUFFER, pipeline.render_target.handle)
 	gl.BindFramebuffer(gl.DRAW_FRAMEBUFFER, 0)
-	gl.ReadBuffer(gl.COLOR_ATTACHMENT0)
+	gl.NamedFramebufferReadBuffer(pipeline.render_target.handle, gl.COLOR_ATTACHMENT0)
 
 	gl.BlitFramebuffer(
 		0,
@@ -438,14 +473,24 @@ pipeline_blit_onto_default :: proc(pipeline: ^Pipeline, dstWidth: i32, dstHeight
 		0,
 		dstWidth,
 		dstHeight,
-		gl.COLOR_BUFFER_BIT,
+		gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT,
 		gl.NEAREST,
 	)
 }
 
-pipeline_bind_texture2d :: proc(pipeline: ^Pipeline, name: string, unit: i32, texture: ^Texture2D) {
+pipeline_stage_bind_texture2d :: proc(
+	stage: ^PipelineStage,
+	name: string,
+	unit: i32,
+	texture: ^Texture2D,
+) {
 	gl.BindTextureUnit(u32(unit), texture.handle)
-	pipeline_set_uniform_int(pipeline, name, unit)
+	pipeline_stage_set_uniform_int(stage, name, unit)
+}
+
+pipeline_stage_bind_cube_map :: proc(stage: ^PipelineStage, name: string, unit: i32, cubemap: ^Cubemap2D) {
+	gl.BindTextureUnit(u32(unit), cubemap.handle)
+	pipeline_stage_set_uniform_int(stage, name, unit)
 }
 
 FramebufferAttachmentType :: enum {
@@ -653,5 +698,52 @@ VertexArrayObject :: struct {
 create_vertex_array_object :: proc() -> (vao: ^VertexArrayObject) {
 	vao = new(VertexArrayObject)
 	gl.CreateVertexArrays(1, &vao.handle)
+	return
+}
+
+Cubemap2D :: struct {
+	handle: u32,
+	width:  i32,
+	height: i32,
+	format: PixelFormat,
+}
+
+create_cubemap_2d :: proc(
+	width, height: i32,
+	format: PixelFormat,
+	storage_format: PixelFormat,
+	data: [][^]byte,
+) -> (
+	cubemap: ^Cubemap2D,
+) {
+	cubemap = new(Cubemap2D)
+	cubemap.width = width
+	cubemap.height = height
+	cubemap.format = format
+
+	gl.CreateTextures(gl.TEXTURE_CUBE_MAP, 1, &cubemap.handle)
+	gl.TextureStorage2D(cubemap.handle, 1, u32(storage_format), width, height)
+
+	if data != nil {
+
+		assert(len(data) == 6)
+
+		for i := 0; i < 6; i += 1 {
+			gl.TextureSubImage3D(
+				cubemap.handle,
+				0,
+				0,
+				0,
+				i32(i),
+				width,
+				height,
+				1,
+				u32(format),
+				gl.UNSIGNED_BYTE,
+				data[i],
+			)
+		}
+	}
+
 	return
 }

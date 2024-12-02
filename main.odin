@@ -86,6 +86,77 @@ main_with_ok :: proc() -> (ok: bool) {
 
 	gpu_meshes := upload_mesh_to_gpu(scene.meshes[:]) or_return
 
+	skybox_program := gl.load_shaders_file(
+		"./shaders/skybox.vert.glsl",
+		"./shaders/skybox.frag.glsl",
+	) or_return
+
+	pipeline_skybox_stage_desc := PipelineStageDescription {
+		program = skybox_program,
+		state = PipelineState {
+			cull_face = true,
+			cull_mode = .Front,
+			front_face = .CounterClockwise,
+			depth_test = true,
+			blend = true,
+			blend_src = .SrcAlpha,
+			blend_dst = .OneMinusSrcAlpha,
+			back_polygon_mode = .Fill,
+			front_polygon_mode = .Fill,
+			depth_func = .LessEqual,
+		}
+	}
+
+	pipeline_pbr_stage_desc := PipelineStageDescription {
+		program = program,
+		state = PipelineState {
+			cull_face = true,
+			cull_mode = .Back,
+			front_face = .CounterClockwise,
+			depth_test = true,
+			blend = true,
+			blend_src = .SrcAlpha,
+			blend_dst = .OneMinusSrcAlpha,
+			back_polygon_mode = .Fill,
+			front_polygon_mode = .Fill,
+			depth_func = .Less,
+		},
+		layout = VertexInputLayout {
+			bindings = []VertexInputBinding {
+				VertexInputBinding {
+					binding = 0,
+					stride = size_of(Vertex),
+					elements = []VertexInputAttribute {
+						VertexInputAttribute {
+							location = 0,
+							format = .Float3,
+							normalized = gl.FALSE,
+							offset = u32(offset_of(Vertex, position)),
+						},
+						VertexInputAttribute {
+							location = 1,
+							format = .Float3,
+							normalized = gl.FALSE,
+							offset = u32(offset_of(Vertex, normal)),
+						},
+						VertexInputAttribute {
+							location = 2,
+							format = .Float4,
+							normalized = gl.FALSE,
+							offset = u32(offset_of(Vertex, tangent)),
+						},
+						VertexInputAttribute {
+							location = 3,
+							format = .Float2,
+							normalized = gl.FALSE,
+							offset = u32(offset_of(Vertex, texcoord)),
+						},
+					},
+				},
+			},
+		},
+	}
+
 	pipeline := create_pipeline(
 		PipelineDescription {
 			render_target = create_framebuffer(
@@ -98,54 +169,15 @@ main_with_ok :: proc() -> (ok: bool) {
 					},
 				},
 			),
-			program = program,
-			state = PipelineState {
-				cull_face = true,
-				cull_mode = .Back,
-				front_face = .CounterClockwise,
-				depth_test = true,
-				blend = true,
-				blend_src = .SrcAlpha,
-				blend_dst = .OneMinusSrcAlpha,
-				back_polygon_mode = .Fill,
-				front_polygon_mode = .Fill,
-			},
-			layout = VertexInputLayout {
-				bindings = []VertexInputBinding {
-					VertexInputBinding {
-						binding = 0,
-						stride = size_of(Vertex),
-						elements = []VertexInputAttribute {
-							VertexInputAttribute {
-								location = 0,
-								format = .Float3,
-								normalized = gl.FALSE,
-								offset = u32(offset_of(Vertex, position)),
-							},
-							VertexInputAttribute {
-								location = 1,
-								format = .Float3,
-								normalized = gl.FALSE,
-								offset = u32(offset_of(Vertex, normal)),
-							},
-							VertexInputAttribute {
-								location = 2,
-								format = .Float4,
-								normalized = gl.FALSE,
-								offset = u32(offset_of(Vertex, tangent)),
-							},
-							VertexInputAttribute {
-								location = 3,
-								format = .Float2,
-								normalized = gl.FALSE,
-								offset = u32(offset_of(Vertex, texcoord)),
-							},
-						},
-					},
-				},
-			},
+			stages = []PipelineStageDescription {
+				pipeline_skybox_stage_desc,
+				pipeline_pbr_stage_desc,
+			}
 		},
 	)
+
+	pipeline_skybox_stage := &pipeline.stages[0]
+	pipeline_pbr_stage := &pipeline.stages[1]
 
 	projection := glm.mat4Perspective(
 		glm.radians_f32(70.0),
@@ -188,10 +220,40 @@ main_with_ok :: proc() -> (ok: bool) {
 
 	UniformBlock :: struct {
 		view_proj: glm.mat4,
+		projection: glm.mat4,
+		view: glm.mat4,
 		camera_pos: glm.vec3,
 	}
 
 	uniform_buffer := create_buffer(1, size_of(UniformBlock), nil, .Dynamic)
+
+	sky : ^Cubemap2D = nil
+
+	{
+		cubemap_pixel, cubemap_width, cubemap_height := load_cubemap_pixels_from_file({
+			"./textures/skybox/right.jpg",
+			"./textures/skybox/left.jpg",
+			"./textures/skybox/top.jpg",
+			"./textures/skybox/bottom.jpg",
+			"./textures/skybox/front.jpg",
+			"./textures/skybox/back.jpg",
+		}) or_return
+	
+		sky = create_cubemap_2d(
+			cubemap_width, 
+			cubemap_height,
+			.RGBA,
+			.RGBA8,
+			cubemap_pixel,
+		)
+
+		free_cubemap_pixels(cubemap_pixel)
+
+		if sky == nil {
+			running = false
+			return
+		}
+	}
 
 	for (!glfw.WindowShouldClose(window) && running) {
 		frame_start_time = glfw.GetTime()
@@ -255,10 +317,21 @@ main_with_ok :: proc() -> (ok: bool) {
 
 		uniform_block := UniformBlock {
 			view_proj = projection * view,
+			projection = projection,
+			view = view,
 			camera_pos = camera,
 		}
 
-		pipeline_bind_uniform_block(&pipeline, "UniformBlock", 0, uniform_buffer, &uniform_block)
+		pipeline_stage_begin(pipeline_skybox_stage)
+		pipeline_stage_bind_uniform_block(pipeline_skybox_stage, "UniformBlock", 0, uniform_buffer, &uniform_block)
+		pipeline_stage_bind_cube_map(pipeline_skybox_stage, "uSkybox", 0, sky)
+
+		gl.DrawArrays(gl.TRIANGLES, 0, 36)
+
+		pipeline_stage_end(pipeline_skybox_stage)
+
+		pipeline_stage_begin(pipeline_pbr_stage)
+		pipeline_stage_bind_uniform_block(pipeline_pbr_stage, "UniformBlock", 0, uniform_buffer, &uniform_block)
 
 		for mesh, index in gpu_meshes {
 
@@ -266,22 +339,22 @@ main_with_ok :: proc() -> (ok: bool) {
 			transform_matrix *= glm.mat4FromQuat(scene.meshes[index].transform.rotation)
 			transform_matrix *= glm.mat4Translate(scene.meshes[index].transform.position)
 
-			pipeline_set_uniform_mat4(&pipeline, "uModel", &transform_matrix[0][0])
+			pipeline_stage_set_uniform_mat4(pipeline_pbr_stage, "uModel", &transform_matrix[0][0])
 
-			pipeline_set_vertex_buffer(&pipeline, 0, mesh.vbo)
-			pipeline_set_element_buffer(&pipeline, mesh.ebo)
+			pipeline_stage_set_vertex_buffer(pipeline_pbr_stage, 0, mesh.vbo)
+			pipeline_stage_set_element_buffer(pipeline_pbr_stage, mesh.ebo)
 
 			if scene.meshes[index].meterial.diffuse_texture != nil {
-				pipeline_bind_texture2d(
-					&pipeline,
+				pipeline_stage_bind_texture2d(
+					pipeline_pbr_stage,
 					"uAlbedoTexture",
 					0,
 					scene.meshes[index].meterial.diffuse_texture,
 				)
 			}
 			if scene.meshes[index].meterial.normal_texture != nil {
-				pipeline_bind_texture2d(
-					&pipeline,
+				pipeline_stage_bind_texture2d(
+					pipeline_pbr_stage,
 					"uNormalTexture",
 					1,
 					scene.meshes[index].meterial.normal_texture,
@@ -289,8 +362,8 @@ main_with_ok :: proc() -> (ok: bool) {
 			}
 
 			if scene.meshes[index].meterial.metallic_roughness_texture != nil {
-				pipeline_bind_texture2d(
-					&pipeline,
+				pipeline_stage_bind_texture2d(
+					pipeline_pbr_stage,
 					"uMetallicRoughnessTexture",
 					2,
 					scene.meshes[index].meterial.metallic_roughness_texture,
@@ -299,6 +372,8 @@ main_with_ok :: proc() -> (ok: bool) {
 
 			gl.DrawElements(gl.TRIANGLES, i32(mesh.ebo.count), gl.UNSIGNED_INT, nil)
 		}
+
+		pipeline_stage_end(pipeline_pbr_stage)
 
 		pipeline_end(&pipeline)
 
@@ -317,7 +392,7 @@ main_with_ok :: proc() -> (ok: bool) {
 		gl.DrawArrays(gl.TRIANGLES, 0, 6)
 
 		// pipeline_blit_onto_default(&pipeline, current_window_width, current_window_height)
-
+	
 		glfw.SwapBuffers((window))
 
 		frame_end_time = glfw.GetTime()

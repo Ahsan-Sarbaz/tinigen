@@ -6,6 +6,8 @@ layout (location = 3) in vec2 aTexCoords;
 
 layout (std140) uniform UniformBlock {
     mat4 uVP;
+    mat4 uProjection;
+    mat4 uView;
     vec3 uCameraPos;
 };
 

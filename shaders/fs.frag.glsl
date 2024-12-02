@@ -4,6 +4,8 @@ out vec4 FragColor;
 
 layout (std140) uniform UniformBlock {
     mat4 uVP;
+    mat4 uProjection;
+    mat4 uView;
     vec3 uCameraPos;
 };
 

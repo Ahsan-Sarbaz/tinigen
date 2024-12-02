@@ -405,3 +405,36 @@ upload_mesh_to_gpu :: proc {
 	upload_mesh_to_gpu_list,
 	upload_mesh_to_gpu_single,
 }
+
+load_cubemap_pixels_from_file :: proc(cube_filepath: [6]string) -> (data: [][^]byte, width, height: i32, ok: bool) {
+	data = make([][^]byte, 6)
+
+	for i := 0; i < 6; i+=1 {
+		pixels, w, h, channels := load_pixel_from_file(cube_filepath[i], 4) or_return
+
+		if w != h {
+			fmt.printfln("Cubemap texture %d has different width and height", i)
+			ok = false
+			return
+		}
+
+		width = w
+		height = h
+
+		if pixels == nil {
+			ok = false
+			return
+		}
+
+		data[i] = pixels
+	}
+
+	ok = true
+	return
+}
+
+free_cubemap_pixels :: proc(data: [][^]byte) {
+	for i := 0; i < 6; i+=1 {
+		image.image_free(data[i])
+	}
+}
